@@ -2,7 +2,7 @@ name: build-commit-windows
 
 on:
   push:
-    branches: [main]
+    branches: [main, ci/*]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -28,15 +28,15 @@ jobs:
         uses: msys2/setup-msys2@v2
         with:
           msystem: mingw64
-          update: true
+          update: false
           pacboy: gcc:p cmake:p ninja:p make:p
 
       - name: Restore vcpkg cache
         uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/vcpkg_cache
-          key: vcpkg-windows-x64-${{ hashFiles('desktop/vcpkg.json') }}
-          restore-keys: vcpkg-windows-x64-
+          key: vcpkg-commit-windows-x64-${{ hashFiles('desktop/vcpkg.json') }}
+          restore-keys: vcpkg-commit-windows-x64-
 
       - name: Set up vcpkg
         uses: lukka/run-vcpkg@v11
@@ -45,29 +45,24 @@ jobs:
 
       - name: Configure
         run: |
-          cmake -B build/release -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+          cmake --preset release-mingw \
             -DCMAKE_MAKE_PROGRAM="$MINGW_PREFIX/bin/ninja.exe" \
             -DCMAKE_C_COMPILER="$MINGW_PREFIX/bin/gcc.exe" \
-            -DCMAKE_CXX_COMPILER="$MINGW_PREFIX/bin/g++.exe" \
-            -DVCPKG_TARGET_TRIPLET=x64-mingw-static \
-            -DVCPKG_HOST_TRIPLET=x64-mingw-static \
-            -DCMAKE_EXE_LINKER_FLAGS="-static-libgcc -static-libstdc++ -static -lpthread"
+            -DCMAKE_CXX_COMPILER="$MINGW_PREFIX/bin/g++.exe"
         working-directory: desktop
 
       - name: Build
-        run: cmake --build build/release
+        run: cmake --build --preset release-mingw
         working-directory: desktop
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: pocketwalker-windows-x86_64
-          path: desktop/build/release/release/pocketwalker.exe
+          path: desktop/build/release-mingw/release/pocketwalker.exe
 
       - name: Save vcpkg cache
         uses: actions/cache/save@v4
         with:
           path: ${{ github.workspace }}/vcpkg_cache
-          key: vcpkg-windows-x64-${{ hashFiles('desktop/vcpkg.json') }}
+          key: vcpkg-commit-windows-x64-${{ hashFiles('desktop/vcpkg.json') }}

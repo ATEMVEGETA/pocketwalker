@@ -22,6 +22,18 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release"
       }
+    },
+    {
+      "name": "release-mingw",
+      "inherits": "base",
+      "displayName": "Release MinGW",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "VCPKG_TARGET_TRIPLET": "x64-mingw-static",
+        "VCPKG_HOST_TRIPLET": "x64-mingw-static",
+        "CMAKE_EXE_LINKER_FLAGS": "-static-libgcc -static-libstdc++ -static -lpthread -Wl,--allow-multiple-definition"
+      }
     }
   ],
   "buildPresets": [
@@ -34,6 +46,11 @@
       "name": "release",
       "configurePreset": "release",
       "displayName": "Release"
+    },
+    {
+      "name": "release-mingw",
+      "configurePreset": "release-mingw",
+      "displayName": "Release MinGW"
     }
   ]
 }
