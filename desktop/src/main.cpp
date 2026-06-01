@@ -1,6 +1,7 @@
 #include <iostream>
 #include <QApplication>
 #include <QStyleFactory>
+#include <QSurfaceFormat>
 
 #include "argparse/argparse.hpp"
 
@@ -9,6 +10,12 @@
 
 int main(int argc, char* argv[])
 {
+    QSurfaceFormat fmt;
+    fmt.setVersion(3, 3);
+    fmt.setProfile(QSurfaceFormat::CoreProfile);
+    fmt.setRenderableType(QSurfaceFormat::OpenGL);
+    QSurfaceFormat::setDefaultFormat(fmt);
+
     argparse::ArgumentParser arguments("pocketwalker");
 
     arguments.add_argument("rom")

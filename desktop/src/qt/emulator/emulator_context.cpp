@@ -48,6 +48,17 @@ EmulatorContext::~EmulatorContext()
     if (emulator_thread && emulator_thread->joinable())
         emulator_thread->join();
 
+    audio.reset();
+
+    if (network && network_thread && network_thread->isRunning())
+    {
+        QThread* main_thread = QThread::currentThread();
+        QMetaObject::invokeMethod(
+            network.get(),
+            [n = network.get(), main_thread]() { n->moveToThread(main_thread); },
+            Qt::BlockingQueuedConnection);
+    }
+
     if (network_thread)
     {
         network_thread->quit();

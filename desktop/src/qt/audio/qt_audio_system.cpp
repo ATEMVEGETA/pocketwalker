@@ -1,5 +1,6 @@
 #include "qt_audio_system.h"
 #include <QMediaDevices>
+#include <QThread>
 
 #include "desktop/src/qt/settings/app_settings.h"
 
@@ -20,7 +21,12 @@ QtAudioSystem::QtAudioSystem(QObject* parent) : QObject(parent)
 QtAudioSystem::~QtAudioSystem()
 {
     Flush();
+    sink->disconnect();
     sink->stop();
+    device = nullptr;
+    QThread::msleep(50);
+    delete sink;
+    sink = nullptr;
 }
 
 void QtAudioSystem::PushSample(BuzzerInformation info)
