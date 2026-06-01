@@ -32,6 +32,25 @@ InstructionSet::InstructionSet() :
         }
     });
 
+    root.Add(0x0, 0x4, {
+        "ORC #xx:8, CCR",
+        2,
+        {1, 0, 0, 0, 0, 0},
+        [](CPU& cpu) { cpu.reg.flags.CCR |= cpu.b(); }
+    });
+    root.Add(0x0, 0x5, {
+        "XORC #xx:8, CCR",
+        2,
+        {1, 0, 0, 0, 0, 0},
+        [](CPU& cpu) { cpu.reg.flags.CCR ^= cpu.b(); }
+    });
+    root.Add(0x0, 0x6, {
+        "ANDC #xx:8, CCR",
+        2,
+        {1, 0, 0, 0, 0, 0},
+        [](CPU& cpu) { cpu.reg.flags.CCR &= cpu.b(); }
+    });
+
     root.Add(0x0, 0x8, {
         "ADD.B Rs, Rd",
         2,
