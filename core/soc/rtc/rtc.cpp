@@ -48,7 +48,11 @@ void RTC::Cycle(uint8_t cycles)
 
         const time_t now = std::time(nullptr);
         std::tm current_time = {};
+#ifdef _WIN32
         localtime_s(&current_time, &now);
+#else
+        localtime_r(&now, &current_time);
+#endif
 
         RSECDR = BCD(current_time.tm_sec);
         RMINDR = BCD(current_time.tm_min);

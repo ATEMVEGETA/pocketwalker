@@ -1,6 +1,8 @@
 #pragma once
 #include <bit>
 #include <concepts>
+#include <cstddef>
+#include <cstdint>
 
 // provides an h8/300h big endian byte swap ptr for u16 and u32
 // holy moly this is ugly

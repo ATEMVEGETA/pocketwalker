@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <mutex>
 #include <queue>
 
 #include "core/soc/memory/regions/io.h"
