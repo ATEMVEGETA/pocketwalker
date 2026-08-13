@@ -1426,7 +1426,7 @@ InstructionSet::InstructionSet() :
         {1, 0, 0, 1, 0, 0},
         [](CPU& cpu)
         {
-            uint16_t* rd = cpu.reg.Reg16(cpu.bL());
+            uint8_t* rd = cpu.reg.Reg8(cpu.bL());
             const uint8_t imm = cpu.bH();
 
             if (cpu.reg.flags.C)
