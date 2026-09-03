@@ -19,6 +19,9 @@ EmulatorContext::EmulatorContext(const std::string& rom_path, const std::string&
     {
         emu->LoadRtcState(this->save_path + ".rtc");
         emu->LoadEmulatorState(this->save_path + ".state");
+        emu->ApplyPendingRtcSyncClock();
+        emu->ApplyRtcCatchUpOverflowDays();
+        emu->PrepareRtcCatchUp();
     }
 
     audio = std::make_unique<QtAudioSystem>();

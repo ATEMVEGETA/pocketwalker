@@ -1,11 +1,13 @@
 #include "pocketwalker.h"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstring>
 #include <fstream>
 #include <thread>
 
+#include "core/utils/logger.h"
 #include "core/soc/defines.h"
 #include "core/soc/memory/regions/io.h"
 #include "core/soc/memory/regions/ram.h"
@@ -14,6 +16,8 @@ namespace
 {
 constexpr std::array<char, 8> STATE_MAGIC = {'P', 'W', 'S', 'T', 'A', 'T', '0', '4'};
 constexpr uint32_t MAX_REASONABLE_STEPS = 9999999;
+constexpr auto RTC_CATCH_UP_STEP_STABLE_DELAY = std::chrono::milliseconds(1200);
+constexpr auto RTC_CATCH_UP_STEP_MAX_WAIT = std::chrono::seconds(8);
 
 template <typename T>
 void WriteValue(std::ostream& stream, const T& value)
@@ -139,6 +143,7 @@ void PocketWalker::Start()
     auto next = std::chrono::high_resolution_clock::now();
     bool prev_fast_mode = is_fast_mode;
     bool prev_paused = is_paused;
+    const auto rtc_catch_up_step_wait_started = std::chrono::steady_clock::now();
 
     this->is_running = true;
     while (this->is_running)
@@ -158,6 +163,27 @@ void PocketWalker::Start()
         const uint8_t cycles = soc->Cycle();
         CyclePeripherals(cycles);
         CycleEnhancements(cycles);
+
+        if (rtc_catch_up_waiting_for_steps)
+        {
+            const auto now = std::chrono::steady_clock::now();
+            const uint32_t total_steps = soc->memory->Read32(PW_ADDR_TOTAL_STEPS);
+            const uint32_t session_steps = soc->memory->Read32(PW_ADDR_SESSION_STEPS);
+
+            if (total_steps != rtc_catch_up_last_total_steps || session_steps != rtc_catch_up_last_session_steps)
+            {
+                rtc_catch_up_last_total_steps = total_steps;
+                rtc_catch_up_last_session_steps = session_steps;
+                rtc_catch_up_steps_stable_since = now;
+            }
+
+            if (now - rtc_catch_up_steps_stable_since >= RTC_CATCH_UP_STEP_STABLE_DELAY ||
+                now - rtc_catch_up_step_wait_started >= RTC_CATCH_UP_STEP_MAX_WAIT)
+            {
+                rtc_catch_up_waiting_for_steps = false;
+                soc->rtc->AllowCatchUpToRun(true);
+            }
+        }
 
         next += CYCLE_DURATION * cycles;
 
@@ -291,6 +317,54 @@ void PocketWalker::SaveRtcState(const std::string& path) const
     soc->rtc->SaveState(path);
 }
 
+bool PocketWalker::IsRtcCatchUpActive() const
+{
+    return soc->rtc->IsCatchUpActive();
+}
+
+size_t PocketWalker::RtcCatchUpMidnightsCompleted() const
+{
+    return soc->rtc->CatchUpMidnightsCompleted();
+}
+
+size_t PocketWalker::RtcCatchUpMidnightsTotal() const
+{
+    return soc->rtc->CatchUpMidnightsTotal();
+}
+
+void PocketWalker::ApplyRtcCatchUpOverflowDays() const
+{
+    const uint32_t overflow_days = soc->rtc->ConsumeCatchUpOverflowDays();
+    if (overflow_days == 0)
+        return;
+
+    const uint16_t current_days = soc->memory->Read16(PW_ADDR_TOTAL_DAYS);
+    const uint32_t patched_days = std::min<uint32_t>(current_days + overflow_days, 0xFFFF);
+    soc->memory->Write16(PW_ADDR_TOTAL_DAYS, static_cast<uint16_t>(patched_days));
+    Log::Info("Patched total days for large RTC catch-up: {} + {} -> {}", current_days, overflow_days, patched_days);
+}
+
+void PocketWalker::ApplyPendingRtcSyncClock() const
+{
+    soc->rtc->ApplyPendingSyncClock();
+}
+
+void PocketWalker::PrepareRtcCatchUp()
+{
+    if (!soc->rtc->IsCatchUpActive())
+    {
+        soc->rtc->AllowCatchUpToRun(false);
+        rtc_catch_up_waiting_for_steps = false;
+        return;
+    }
+
+    soc->rtc->AllowCatchUpToRun(false);
+    rtc_catch_up_waiting_for_steps = true;
+    rtc_catch_up_last_total_steps = soc->memory->Read32(PW_ADDR_TOTAL_STEPS);
+    rtc_catch_up_last_session_steps = soc->memory->Read32(PW_ADDR_SESSION_STEPS);
+    rtc_catch_up_steps_stable_since = std::chrono::steady_clock::now();
+}
+
 bool PocketWalker::LoadEmulatorState(const std::string& path) const
 {
     std::ifstream f(path, std::ios::binary);
@@ -373,11 +447,6 @@ bool PocketWalker::LoadEmulatorState(const std::string& path) const
 
     if (!soc->ssu->LoadEmulatorState(f))
         return false;
-
-    const uint32_t total_steps = soc->memory->Read32(PW_ADDR_TOTAL_STEPS);
-    const uint32_t session_steps = soc->memory->Read32(PW_ADDR_SESSION_STEPS);
-    if (session_steps == 0 && total_steps > 0 && total_steps <= MAX_REASONABLE_STEPS)
-        soc->memory->Write32(PW_ADDR_SESSION_STEPS, total_steps);
 
     return true;
 }

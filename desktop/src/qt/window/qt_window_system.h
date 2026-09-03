@@ -9,6 +9,11 @@
 #include "desktop/src/qt/emulator/emulator_context.h"
 
 class DisplayWidget;
+class QLabel;
+class QMessageBox;
+class QProgressBar;
+class QStackedWidget;
+class QWidget;
 
 class QtWindowSystem : public QMainWindow
 {
@@ -37,14 +42,30 @@ private:
     void updateRecentROMsMenu();
     void setEmulatorActionsEnabled(bool enabled);
     void releaseHeldInputs();
+    void beginSettledShutdown();
+    void updateSettledShutdownCountdown();
+    void finishSettledShutdown();
+    void beginStartupCatchUp();
+    void updateStartupCatchUp();
+    bool isStartupCatchUpActive() const;
     void applyTheme();
     void setBypassPowerSave();
 
     ApplicationArguments args;
 
     std::unique_ptr<EmulatorContext> context;
+    QStackedWidget* central_stack = nullptr;
     DisplayWidget* display = nullptr;
+    QWidget* startup_catch_up_widget = nullptr;
+    QLabel* startup_catch_up_label = nullptr;
+    QProgressBar* startup_catch_up_progress = nullptr;
     QTimer* render_timer = nullptr;
+    QTimer* shutdown_settle_timer = nullptr;
+    QTimer* startup_catch_up_timer = nullptr;
+    QMessageBox* shutdown_wait_dialog = nullptr;
+    int shutdown_settle_seconds_remaining = 0;
+    bool shutdown_settle_active = false;
+    bool startup_catch_up_active = false;
     QMenu* recent_roms_menu = nullptr;
     QAction* import_save_action = nullptr;
 
