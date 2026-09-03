@@ -17,7 +17,7 @@ namespace
 {
 constexpr auto CATCH_UP_MIN_MIDNIGHT_HOLD = std::chrono::milliseconds(10);
 constexpr auto CATCH_UP_MAX_MIDNIGHT_HOLD = std::chrono::milliseconds(250);
-constexpr size_t MAX_FIRMWARE_CATCH_UP_MIDNIGHTS = 7;
+constexpr size_t MAX_FIRMWARE_CATCH_UP_MIDNIGHTS = 8;
 }
 
 static uint8_t BCD(const uint8_t number)
