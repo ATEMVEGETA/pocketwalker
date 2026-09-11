@@ -68,7 +68,6 @@ public:
     bool IsRtcCatchUpActive() const;
     size_t RtcCatchUpMidnightsCompleted() const;
     size_t RtcCatchUpMidnightsTotal() const;
-    void ApplyRtcCatchUpOverflowDays() const;
     void ApplyPendingRtcSyncClock() const;
     void ClearPendingRtcInterruptFlagsForCatchUp() const;
     void PrepareRtcCatchUp();

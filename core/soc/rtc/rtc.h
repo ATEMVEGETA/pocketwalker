@@ -48,13 +48,13 @@ public:
     bool IsCatchUpWaitingForFirmwareSettle() const;
     size_t CatchUpMidnightsCompleted() const;
     size_t CatchUpMidnightsTotal() const;
-    uint32_t ConsumeCatchUpOverflowDays();
     void AllowCatchUpToRun(bool value);
     void ApplyPendingSyncClock();
     void ClearPendingInterruptFlagsForCatchUp();
     void MarkCurrentDayProcessed();
     void MarkCatchUpFirmwareSettled();
     void DebugMessage(const std::string& message) const;
+    bool HasPersistentClock() const;
 
     RTCCR1_t RTCCR1 = {};
     uint8_t RSECDR = 0;
@@ -68,6 +68,7 @@ private:
     uint32_t rtc_cycles = 0;
     uint8_t quarters = 0;
     bool initialized = false;
+    bool persistent_clock_initialized = false;
     bool wall_clock_initialized = false;
     bool catch_up_allowed_to_run = false;
     bool catch_up_waiting_for_firmware_settle = false;
@@ -84,7 +85,6 @@ private:
     time_t catch_up_target_host_time = 0;
     time_t catch_up_current_midnight = 0;
     time_t last_processed_midnight = 0;
-    uint32_t catch_up_overflow_days = 0;
     bool has_pending_sync_time = false;
     std::vector<time_t> catch_up_midnights = {};
     size_t catch_up_midnight_index = 0;
@@ -94,7 +94,7 @@ private:
     void SetRegistersFromVirtualTime();
     void RequestClockDisplayRefresh();
     void RequestClockDisplayRefreshNearMidnight();
-    void SyncVirtualTimeFromRegisters();
+    void SyncVirtualTimeFromRegisters(bool persistent_time_write = false);
     void StartCatchUp(time_t processed_midnight, time_t target_time, time_t target_host_time = 0);
     void CycleCatchUp();
     void DebugLog(const std::string& message) const;

@@ -435,21 +435,6 @@ size_t PocketWalker::RtcCatchUpMidnightsTotal() const
     return soc->rtc->CatchUpMidnightsTotal();
 }
 
-void PocketWalker::ApplyRtcCatchUpOverflowDays() const
-{
-    const uint32_t overflow_days = soc->rtc->ConsumeCatchUpOverflowDays();
-    if (overflow_days == 0)
-        return;
-
-    const uint16_t current_days = soc->memory->Read16(PW_ADDR_TOTAL_DAYS);
-    const uint32_t patched_days = std::min<uint32_t>(current_days + overflow_days, 0xFFFF);
-    soc->memory->Write16(PW_ADDR_TOTAL_DAYS, static_cast<uint16_t>(patched_days));
-    soc->rtc->DebugMessage("overflow_total_days_patch old_days=" + std::to_string(current_days) +
-                           " overflow_days=" + std::to_string(overflow_days) +
-                           " new_days=" + std::to_string(patched_days));
-    Log::Info("Patched total days for large RTC catch-up: {} + {} -> {}", current_days, overflow_days, patched_days);
-}
-
 void PocketWalker::ApplyPendingRtcSyncClock() const
 {
     soc->rtc->ApplyPendingSyncClock();

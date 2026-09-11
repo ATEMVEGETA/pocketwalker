@@ -279,6 +279,7 @@ RTC::RTC(const std::shared_ptr<Interrupts>& interrupts)
     this->interrupts = interrupts;
     this->virtual_time = CurrentHostTime();
     this->last_processed_midnight = LocalMidnightAtOrBefore(this->virtual_time);
+    this->ignore_rtc_writes_until = Clock::now() + std::chrono::seconds(3);
 }
 
 void RTC::RegisterIOHandlers(const std::shared_ptr<IO>& io)
@@ -341,13 +342,13 @@ void RTC::LoadState(std::istream& f, const std::filesystem::path& rtc_directory)
     const auto now_wall = Clock::now();
     ignore_rtc_writes_until = now_wall + std::chrono::seconds(3);
     wall_clock_initialized = false;
+    persistent_clock_initialized = false;
     catch_up_allowed_to_run = false;
     catch_up_midnights.clear();
     catch_up_midnight_index = 0;
     catch_up_target_time = 0;
     catch_up_target_host_time = 0;
     catch_up_current_midnight = 0;
-    catch_up_overflow_days = 0;
     catch_up_waiting_for_firmware_settle = false;
     suppress_day_week_flags_once = false;
     has_pending_sync_time = false;
@@ -390,14 +391,39 @@ void RTC::LoadState(std::istream& f, const std::filesystem::path& rtc_directory)
     f.read(reinterpret_cast<char*>(&saved_host_time), sizeof(saved_host_time));
     f.read(reinterpret_cast<char*>(&saved_processed_midnight), sizeof(saved_processed_midnight));
 
-    if (!f || std::string(magic, sizeof(magic)) != "PWRTC002")
+    const std::string magic_string(magic, sizeof(magic));
+    bool saved_persistent_clock_initialized = false;
+    if (f && magic_string == "PWRTC002")
+    {
+        // Legacy metadata existed only after the older RTC persistence path had
+        // saved a clock, so keep it compatible by treating it as initialized.
+        saved_persistent_clock_initialized = true;
+    }
+    else if (f && magic_string == "PWRTC003")
+    {
+        uint8_t persistent_flag = 0;
+        f.read(reinterpret_cast<char*>(&persistent_flag), sizeof(persistent_flag));
+        saved_persistent_clock_initialized = persistent_flag != 0;
+    }
+
+    if (!f || (magic_string != "PWRTC002" && magic_string != "PWRTC003"))
     {
         last_processed_midnight = LocalMidnightAtOrBefore(virtual_time);
-        DebugLog("rtc_metadata=invalid_or_old magic=" + std::string(magic, sizeof(magic)) +
+        persistent_clock_initialized = false;
+        DebugLog("rtc_metadata=invalid_or_old magic=" + magic_string +
                  "; catch-up skipped, last_processed_midnight=" + DescribeTime(last_processed_midnight));
+    }
+    else if (!saved_persistent_clock_initialized)
+    {
+        persistent_clock_initialized = false;
+        last_processed_midnight = LocalMidnightAtOrBefore(virtual_time);
+        last_time = LocalTime(virtual_time);
+        DebugLog("rtc_metadata=uninitialized; catch-up skipped, last_processed_midnight=" +
+                 DescribeTime(last_processed_midnight));
     }
     else
     {
+        persistent_clock_initialized = true;
         const HostClockInfo clock = CurrentHostClock(rtc_directory);
         const time_t now = clock.value;
         int64_t elapsed = static_cast<int64_t>(now) - saved_host_time;
@@ -464,12 +490,12 @@ void RTC::ApplyPendingSyncClock()
     catch_up_target_time = 0;
     catch_up_target_host_time = 0;
     catch_up_current_midnight = 0;
-    catch_up_overflow_days = 0;
     catch_up_waiting_for_firmware_settle = false;
     suppress_day_week_flags_once = false;
     catch_up_hold_until = {};
     catch_up_force_next_after = {};
     wall_clock_initialized = false;
+    persistent_clock_initialized = true;
     quarters = 0;
     ignore_rtc_writes_until = Clock::now() + std::chrono::seconds(3);
     interrupts->RTCFLG.VALUE = 0;
@@ -485,6 +511,11 @@ void RTC::ApplyPendingSyncClock()
     interrupts->RTCFLG.HRIFG = true;
     DebugLog("ApplyPendingSyncClock complete virtual=" + DescribeTime(virtual_time) +
              " last_processed_midnight=" + DescribeTime(last_processed_midnight));
+}
+
+bool RTC::HasPersistentClock() const
+{
+    return persistent_clock_initialized;
 }
 
 bool RTC::IsCatchUpActive() const
@@ -505,15 +536,6 @@ size_t RTC::CatchUpMidnightsCompleted() const
 size_t RTC::CatchUpMidnightsTotal() const
 {
     return catch_up_midnights.size();
-}
-
-uint32_t RTC::ConsumeCatchUpOverflowDays()
-{
-    const uint32_t result = catch_up_overflow_days;
-    catch_up_overflow_days = 0;
-    if (result != 0)
-        DebugLog("overflow_days_consumed=" + std::to_string(result));
-    return result;
 }
 
 void RTC::MarkCurrentDayProcessed()
@@ -619,7 +641,6 @@ void RTC::StartCatchUp(const time_t processed_midnight, const time_t target_time
     catch_up_target_time = 0;
     catch_up_target_host_time = target_host_time;
     catch_up_current_midnight = 0;
-    catch_up_overflow_days = 0;
     catch_up_waiting_for_firmware_settle = false;
     catch_up_hold_until = {};
     catch_up_force_next_after = {};
@@ -811,7 +832,7 @@ void RTC::SaveState(std::ostream& f, const std::filesystem::path& rtc_directory)
     if (debug_log_path.empty())
         debug_log_path = rtc_directory / "pocketwalker_rtc_debug.log";
 
-    const char magic[8] = {'P', 'W', 'R', 'T', 'C', '0', '0', '2'};
+    const char magic[8] = {'P', 'W', 'R', 'T', 'C', '0', '0', '3'};
     const int64_t saved_virtual_time = static_cast<int64_t>(IsCatchUpActive() ? catch_up_target_time : virtual_time);
     const HostClockInfo clock = CurrentHostClock(rtc_directory);
     const int64_t saved_host_time = static_cast<int64_t>(clock.value);
@@ -819,13 +840,19 @@ void RTC::SaveState(std::ostream& f, const std::filesystem::path& rtc_directory)
     if (saved_processed_midnight == 0)
         saved_processed_midnight = static_cast<int64_t>(LocalMidnightAtOrBefore(virtual_time));
 
+    const uint8_t saved_persistent_clock_initialized = persistent_clock_initialized ? 1 : 0;
+
     f.write(magic, sizeof(magic));
     f.write(reinterpret_cast<const char*>(&saved_virtual_time), sizeof(saved_virtual_time));
     f.write(reinterpret_cast<const char*>(&saved_host_time), sizeof(saved_host_time));
     f.write(reinterpret_cast<const char*>(&saved_processed_midnight), sizeof(saved_processed_midnight));
+    f.write(reinterpret_cast<const char*>(&saved_persistent_clock_initialized),
+            sizeof(saved_persistent_clock_initialized));
     DebugLog("SaveState virtual=" + DescribeTime(static_cast<time_t>(saved_virtual_time)) +
              " host=" + DescribeTime(static_cast<time_t>(saved_host_time)) +
              " processed_midnight=" + DescribeTime(static_cast<time_t>(saved_processed_midnight)) +
+             " persistent_clock_initialized=" +
+             (persistent_clock_initialized ? std::string("true") : std::string("false")) +
              " catch_up_active=" + (IsCatchUpActive() ? std::string("true") : std::string("false")) +
              " clock_source=" + clock.source +
              " anchor_paused=" + (clock.anchor_paused ? std::string("true") : std::string("false")));
@@ -846,6 +873,7 @@ bool RTC::LoadEmulatorState(std::istream& stream)
 
     virtual_time = static_cast<time_t>(saved_virtual_time);
     last_time = LocalTime(static_cast<time_t>(saved_last_time));
+    persistent_clock_initialized = false;
     wall_clock_initialized = false;
     catch_up_allowed_to_run = false;
     catch_up_midnights.clear();
@@ -853,7 +881,6 @@ bool RTC::LoadEmulatorState(std::istream& stream)
     catch_up_target_time = 0;
     catch_up_target_host_time = 0;
     catch_up_current_midnight = 0;
-    catch_up_overflow_days = 0;
     catch_up_waiting_for_firmware_settle = false;
     suppress_day_week_flags_once = false;
     has_pending_sync_time = false;
@@ -931,8 +958,11 @@ void RTC::TickQuarter()
         interrupts->RTCFLG.SEIFG1 = true;
         interrupts->RTCFLG.MNIFG = true;
         interrupts->RTCFLG.HRIFG = true;
-        interrupts->RTCFLG.DYIFG = true;
-        interrupts->RTCFLG.WKIFG = true;
+        if (persistent_clock_initialized)
+        {
+            interrupts->RTCFLG.DYIFG = true;
+            interrupts->RTCFLG.WKIFG = true;
+        }
 
         last_time = current_time;
         initialized = true;
@@ -961,7 +991,7 @@ void RTC::TickQuarter()
 
         if (current_time.tm_mday != last_time.tm_mday) [[unlikely]]
         {
-            if (!suppress_day_week)
+            if (persistent_clock_initialized && !suppress_day_week)
                 interrupts->RTCFLG.DYIFG = true;
             else
                 DebugLog("suppressed day flag after catch-up virtual=" + DescribeTime(virtual_time));
@@ -969,7 +999,7 @@ void RTC::TickQuarter()
 
         if (current_time.tm_wday != last_time.tm_wday) [[unlikely]]
         {
-            if (!suppress_day_week)
+            if (persistent_clock_initialized && !suppress_day_week)
                 interrupts->RTCFLG.WKIFG = true;
             else
                 DebugLog("suppressed week flag after catch-up virtual=" + DescribeTime(virtual_time));
@@ -1013,7 +1043,7 @@ void RTC::RequestClockDisplayRefreshNearMidnight()
     interrupts->RTCFLG.MNIFG = true;
 }
 
-void RTC::SyncVirtualTimeFromRegisters()
+void RTC::SyncVirtualTimeFromRegisters(const bool persistent_time_write)
 {
     std::tm current_time = LocalTime(virtual_time);
     current_time.tm_sec = std::min<uint8_t>(FromBCD(RSECDR), 59);
@@ -1031,6 +1061,25 @@ void RTC::SyncVirtualTimeFromRegisters()
 
     virtual_time = std::mktime(&current_time);
     last_time = LocalTime(virtual_time);
+    if (persistent_time_write)
+    {
+        if (!persistent_clock_initialized)
+            DebugLog("persistent RTC initialized by device time write");
+
+        persistent_clock_initialized = true;
+        last_processed_midnight = LocalMidnightAtOrBefore(virtual_time);
+        catch_up_midnights.clear();
+        catch_up_midnight_index = 0;
+        catch_up_target_time = 0;
+        catch_up_target_host_time = 0;
+        catch_up_current_midnight = 0;
+        catch_up_waiting_for_firmware_settle = false;
+        suppress_day_week_flags_once = false;
+        catch_up_hold_until = {};
+        catch_up_force_next_after = {};
+        DebugLog("persistent RTC sync virtual=" + DescribeTime(virtual_time) +
+                 " last_processed_midnight=" + DescribeTime(last_processed_midnight));
+    }
 }
 
 bool RTC::CanAcceptRtcWrites() const
@@ -1051,7 +1100,7 @@ void RTC::WriteSeconds(const uint8_t value)
     RSECDR = value;
     const bool accepted = CanAcceptRtcWrites();
     if (accepted)
-        SyncVirtualTimeFromRegisters();
+        SyncVirtualTimeFromRegisters(true);
 }
 
 void RTC::WriteMinutes(const uint8_t value)
@@ -1059,7 +1108,7 @@ void RTC::WriteMinutes(const uint8_t value)
     RMINDR = value;
     const bool accepted = CanAcceptRtcWrites();
     if (accepted)
-        SyncVirtualTimeFromRegisters();
+        SyncVirtualTimeFromRegisters(true);
 }
 
 void RTC::WriteHours(const uint8_t value)
@@ -1067,7 +1116,7 @@ void RTC::WriteHours(const uint8_t value)
     RHRDR = value;
     const bool accepted = CanAcceptRtcWrites();
     if (accepted)
-        SyncVirtualTimeFromRegisters();
+        SyncVirtualTimeFromRegisters(true);
 }
 
 void RTC::WriteWeekday(const uint8_t value)
@@ -1075,5 +1124,5 @@ void RTC::WriteWeekday(const uint8_t value)
     RWKDR = value;
     const bool accepted = CanAcceptRtcWrites();
     if (accepted)
-        SyncVirtualTimeFromRegisters();
+        SyncVirtualTimeFromRegisters(true);
 }

@@ -201,8 +201,14 @@ std::string ReadRtcLastActiveDateFromBytes(const ByteBuffer& rtc)
         return {};
 
     const std::string magic(reinterpret_cast<const char*>(rtc.data()), 8);
-    if (magic != "PWRTC002")
+    if (magic != "PWRTC002" && magic != "PWRTC003")
         return {};
+
+    if (magic == "PWRTC003")
+    {
+        if (rtc.size() < 33 || rtc[32] == 0)
+            return {};
+    }
 
     int64_t saved_host_time = 0;
     std::copy_n(rtc.data() + 16, sizeof(saved_host_time), reinterpret_cast<uint8_t*>(&saved_host_time));
@@ -379,8 +385,17 @@ std::string ReadRtcLastActiveDate(const std::string& save_path)
     file.read(reinterpret_cast<char*>(&saved_host_time), sizeof(saved_host_time));
     file.read(reinterpret_cast<char*>(&saved_processed_midnight), sizeof(saved_processed_midnight));
 
-    if (!file || std::string(magic, sizeof(magic)) != "PWRTC002")
+    const std::string magic_string(magic, sizeof(magic));
+    if (!file || (magic_string != "PWRTC002" && magic_string != "PWRTC003"))
         return {};
+
+    if (magic_string == "PWRTC003")
+    {
+        uint8_t persistent_flag = 0;
+        file.read(reinterpret_cast<char*>(&persistent_flag), sizeof(persistent_flag));
+        if (!file || persistent_flag == 0)
+            return {};
+    }
 
     return FormatLocalDate(static_cast<std::time_t>(saved_host_time));
 }
@@ -438,7 +453,6 @@ bool LoadPwsavRuntimeState(PocketWalker& emu, const std::string& save_path)
     std::string rtc_bytes(reinterpret_cast<const char*>(pwsav.rtc.data()), pwsav.rtc.size());
     std::istringstream rtc_stream(rtc_bytes, std::ios::in | std::ios::binary);
     emu.LoadRtcState(rtc_stream, pwsav_path.parent_path());
-    emu.ApplyRtcCatchUpOverflowDays();
     emu.PrepareRtcCatchUp();
     AppendRtcDebug(save_path, "pwsav state validation passed; loaded state and rtc metadata");
     return true;
@@ -531,7 +545,6 @@ EmulatorContext::EmulatorContext(const std::string& rom_path, const std::string&
                 AppendRtcDebug(this->save_path, "sidecar state validation passed; loading state and rtc metadata");
                 emu->LoadEmulatorState(state_path);
                 emu->LoadRtcState(this->save_path + ".rtc");
-                emu->ApplyRtcCatchUpOverflowDays();
                 emu->PrepareRtcCatchUp();
             }
             else
