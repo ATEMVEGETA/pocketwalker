@@ -1,6 +1,5 @@
 #include "m95512.h"
 
-#include <print>
 
 void M95512::Receive(uint8_t data)
 {

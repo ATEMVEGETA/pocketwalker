@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 #include <cstdint>
 
 struct AccelSample
@@ -12,5 +13,5 @@ public:
     virtual ~SampleProvider() = default;
     virtual AccelSample GetSample() = 0;
 
-    bool is_enabled = false;
+    std::atomic<bool> is_enabled = false;
 };

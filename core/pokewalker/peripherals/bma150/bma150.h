@@ -39,6 +39,15 @@ public:
     void Cycle(uint32_t cycles) override;
     void SaveEmulatorState(std::ostream& stream);
     bool LoadEmulatorState(std::istream& stream);
+    void TriggerMotionInterrupt()
+    {
+        OnOutputPin({BMA150_PIN_INT, true});
+        OnOutputPin({BMA150_PIN_INT, false});
+    }
+    uint8_t ReadRegister(uint8_t address)
+    {
+        return mem.Read8(address & 0x7F);
+    }
 
     void SetSampleProvider(const std::shared_ptr<SampleProvider>& provider)
     {

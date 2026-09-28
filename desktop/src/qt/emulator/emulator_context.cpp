@@ -506,8 +506,9 @@ bool WritePwsavFile(const std::string& save_path, const PocketWalker& emu)
 }
 
 EmulatorContext::EmulatorContext(const std::string& rom_path, const std::string& save_path,
-                                 const ApplicationArguments& args, QObject* parent)
-    : QObject(parent), rom_path(rom_path)
+                                 const ApplicationArguments& args, QObject* parent,
+                                 const bool defer_network_start)
+    : QObject(parent), rom_path(rom_path), network_args(args)
 {
     this->save_path = save_path;
     rtc_last_active_date = ReadRtcLastActiveDate(this->save_path);
@@ -557,19 +558,12 @@ EmulatorContext::EmulatorContext(const std::string& rom_path, const std::string&
     audio = std::make_unique<QtAudioSystem>();
     emu->OnSamplePushed([this](BuzzerInformation info)
     {
-        audio->PushSample(info);
+        if (audio_enabled.load(std::memory_order_relaxed))
+            audio->PushSample(info);
     });
 
-    const auto& ir = AppSettings::instance.ir;
-    const bool server_mode = args.server_mode.value_or(ir.mode == IRSettings::Mode::Server);
-    const QString host = QString::fromStdString(args.host.value_or(ir.host));
-    const quint16 port = args.port.value_or(ir.port);
-
-    network_thread = std::make_unique<QThread>();
-    network = std::make_unique<QtNetworkSystem>(*emu, server_mode, host, port, 5);
-    network->moveToThread(network_thread.get());
-    connect(network_thread.get(), &QThread::started, network.get(), &QtNetworkSystem::start);
-    network_thread->start();
+    if (!defer_network_start)
+        startNetwork();
 
     emulator_thread = std::make_unique<std::thread>([this] { emu->Start(); });
 }
@@ -612,6 +606,56 @@ EmulatorContext::~EmulatorContext()
     }
 
     writeSave();
+}
+
+void EmulatorContext::startNetwork()
+{
+    if (!emu || network || network_thread)
+        return;
+
+    const auto& ir = AppSettings::instance.ir;
+    const auto default_network_mode = network_args.server_mode.value_or(ir.mode == IRSettings::Mode::Server)
+        ? ApplicationArguments::NetworkMode::Server
+        : ApplicationArguments::NetworkMode::Client;
+    const auto network_mode = network_args.network_mode.value_or(default_network_mode);
+    if (network_mode == ApplicationArguments::NetworkMode::Disabled)
+        return;
+
+    const QString host = QString::fromStdString(network_args.host.value_or(ir.host));
+    const quint16 port = network_args.port.value_or(ir.port);
+    QtNetworkSystem::Mode qt_network_mode = QtNetworkSystem::Mode::Client;
+    if (network_mode == ApplicationArguments::NetworkMode::Server)
+        qt_network_mode = QtNetworkSystem::Mode::Server;
+    else if (network_mode == ApplicationArguments::NetworkMode::AutoPeer)
+        qt_network_mode = QtNetworkSystem::Mode::AutoPeer;
+
+    network_thread = std::make_unique<QThread>();
+    network = std::make_unique<QtNetworkSystem>(
+        *emu, qt_network_mode, host, port, 5,
+        QString::fromStdString(network_args.peer_id));
+    network->moveToThread(network_thread.get());
+    connect(network.get(), &QtNetworkSystem::statusChanged,
+            this, &EmulatorContext::networkStatusChanged, Qt::QueuedConnection);
+    connect(network.get(), &QtNetworkSystem::hostDiscovered,
+            this, &EmulatorContext::networkHostDiscovered, Qt::QueuedConnection);
+    connect(network_thread.get(), &QThread::started, network.get(), &QtNetworkSystem::start);
+    network_thread->start();
+}
+
+bool EmulatorContext::checkpointSave()
+{
+    if (!emu || checkpoint_in_progress || save_path.empty() || emu->IsRtcCatchUpActive())
+        return false;
+
+    checkpoint_in_progress = true;
+    emu->Stop();
+    if (emulator_thread && emulator_thread->joinable())
+        emulator_thread->join();
+
+    writeSave();
+    emulator_thread = std::make_unique<std::thread>([this] { emu->Start(); });
+    checkpoint_in_progress = false;
+    return true;
 }
 
 void EmulatorContext::loadSave()

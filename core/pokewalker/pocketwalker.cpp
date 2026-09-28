@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <cstdint>
 #include <fstream>
@@ -23,6 +24,11 @@ constexpr auto RTC_CATCH_UP_SETTLE_SAMPLE_INTERVAL = std::chrono::milliseconds(1
 constexpr auto RTC_CATCH_UP_SETTLE_STABLE_DELAY = std::chrono::milliseconds(3);
 constexpr auto RTC_CATCH_UP_SETTLE_MAX_WAIT = std::chrono::milliseconds(25);
 constexpr uint16_t RTC_CATCH_UP_TURBO_BATCH = 512;
+#ifdef __ANDROID__
+constexpr uint16_t NORMAL_EMULATION_BATCH = 512;
+#else
+constexpr uint16_t NORMAL_EMULATION_BATCH = 1;
+#endif
 constexpr uint16_t RTC_CATCH_UP_RAM_HASH_START = 0xF780;
 constexpr uint16_t RTC_CATCH_UP_RAM_HASH_SIZE = 0x100;
 constexpr auto PEER_COOLDOWN_NORMALIZE_DELAY = std::chrono::milliseconds(1500);
@@ -193,7 +199,7 @@ void PocketWalker::Start()
 
         uint32_t elapsed_cycles = 0;
         const bool catch_up_turbo = soc->rtc->IsCatchUpActive();
-        const uint16_t batch_size = catch_up_turbo ? RTC_CATCH_UP_TURBO_BATCH : 1;
+        const uint16_t batch_size = catch_up_turbo ? RTC_CATCH_UP_TURBO_BATCH : NORMAL_EMULATION_BATCH;
 
         for (uint16_t i = 0; i < batch_size && this->is_running && !this->is_paused; i++)
         {
@@ -298,7 +304,7 @@ void PocketWalker::SetSessionSteps(uint32_t value)
 void PocketWalker::UseSyntheticSteps(bool value)
 {
     const bool was_enabled = this->step_provider->is_enabled;
-    this->step_provider->is_enabled = value;
+    this->step_provider->SetContinuous(value);
     soc->rtc->DebugMessage("UseSyntheticSteps requested=" + std::string(value ? "true" : "false") +
                            " previous=" + (was_enabled ? std::string("true") : std::string("false")) +
                            " total_steps=" + std::to_string(soc->memory->Read32(PW_ADDR_TOTAL_STEPS)) +
@@ -310,6 +316,60 @@ void PocketWalker::UseSyntheticSteps(bool value)
                            " pfcr=" + std::to_string(soc->ssu->PFCR.VALUE) +
                            " bma_control1=" + std::to_string(*bma150->control1));
     (void)was_enabled;
+}
+
+void PocketWalker::UseExternalAccelerometer(const bool value)
+{
+    step_provider->SetExternalMode(value);
+}
+
+void PocketWalker::SetExternalAcceleration(const float x, const float y, const float z)
+{
+    const auto convert = [](const float acceleration) {
+        constexpr float STANDARD_GRAVITY = 9.80665f;
+        constexpr float BMA150_MSB_COUNTS_PER_G = 64.0f;
+        const long value = std::lround(
+            (acceleration / STANDARD_GRAVITY) * BMA150_MSB_COUNTS_PER_G);
+        return static_cast<int8_t>(std::clamp(value, -128L, 127L));
+    };
+
+    step_provider->SetExternalSample(convert(x), convert(y), convert(z));
+}
+
+void PocketWalker::PulseExternalMotion()
+{
+    const bool started = step_provider->PulseExternalMotion();
+    if (started)
+        bma150->TriggerMotionInterrupt();
+}
+
+std::string PocketWalker::GetMotionDiagnostics() const
+{
+    const auto sample = step_provider->ExternalSample();
+    const auto output_sample = step_provider->ExternalOutputSample();
+    return "bma_reads=" + std::to_string(step_provider->ExternalReadCount()) +
+           " sample=" + std::to_string(sample.x) + "," +
+           std::to_string(sample.y) + "," + std::to_string(sample.z) +
+           " bma_sample=" + std::to_string(output_sample.x) + "," +
+           std::to_string(output_sample.y) + "," + std::to_string(output_sample.z) +
+           " bma_irq_cfg=" + std::to_string(bma150->ReadRegister(0x0B)) +
+           " bma_motion_threshold=" + std::to_string(bma150->ReadRegister(0x10)) +
+           " bma_motion_duration=" + std::to_string(bma150->ReadRegister(0x11)) +
+           " bma_range_bw=" + std::to_string(bma150->ReadRegister(0x14)) +
+           " bma_mode_cfg=" + std::to_string(bma150->ReadRegister(0x15)) +
+           " bma_enabled=" + (step_provider->is_enabled.load() ? std::string("true") : "false") +
+           " motion_active=" + (step_provider->ExternalMotionActive() ? std::string("true") : "false") +
+           " motion_primes=" + std::to_string(step_provider->ExternalMotionPrimeCount()) +
+           " motion_delta=" + std::to_string(step_provider->ExternalMaximumDelta()) +
+           " motion_magnitude2=" + std::to_string(step_provider->ExternalMagnitudeSquared()) +
+           " detected_steps=" + std::to_string(step_provider->ExternalDetectedStepCount()) +
+           " firmware_steps=" + std::to_string(step_provider->ExternalFirmwareStepCount()) +
+           " motion_remaining_ms=" + std::to_string(step_provider->ExternalMotionRemainingMilliseconds()) +
+           " bma_control=" + std::to_string(*bma150->control1) +
+           " firmware_samples=" + std::to_string(soc->memory->Read8(PW_ADDR_ACCEL_SAMPLE_COUNT)) +
+           " not_walking=" + std::to_string(soc->memory->Read8(PW_ADDR_IS_NOT_WALKING)) +
+           " session_steps=" + std::to_string(soc->memory->Read32(PW_ADDR_SESSION_STEPS)) +
+           " cpu_sleep=" + (soc->cpu->sleep ? std::string("true") : "false");
 }
 
 void PocketWalker::UseFastMode(bool value)
@@ -403,6 +463,11 @@ void PocketWalker::RestoreVolatileCounters(uint32_t steps, uint16_t watts) const
 void PocketWalker::LoadRtcState(const std::string& path) const
 {
     soc->rtc->LoadState(path);
+}
+
+SSD1854DrawInfo PocketWalker::GetDrawInfoSnapshot() const
+{
+    return this->ssd1854->GetDrawInfoSnapshot();
 }
 
 void PocketWalker::LoadRtcState(std::istream& stream, const std::filesystem::path& base_directory) const

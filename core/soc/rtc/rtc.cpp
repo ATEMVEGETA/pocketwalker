@@ -347,6 +347,9 @@ void RTC::LoadState(std::istream& f, const std::filesystem::path& rtc_directory)
     catch_up_midnights.clear();
     catch_up_midnight_index = 0;
     catch_up_target_time = 0;
+    published_catch_up_active.store(false, std::memory_order_release);
+    published_catch_up_completed.store(0, std::memory_order_release);
+    published_catch_up_total.store(0, std::memory_order_release);
     catch_up_target_host_time = 0;
     catch_up_current_midnight = 0;
     catch_up_waiting_for_firmware_settle = false;
@@ -488,6 +491,9 @@ void RTC::ApplyPendingSyncClock()
     catch_up_midnights.clear();
     catch_up_midnight_index = 0;
     catch_up_target_time = 0;
+    published_catch_up_active.store(false, std::memory_order_release);
+    published_catch_up_completed.store(0, std::memory_order_release);
+    published_catch_up_total.store(0, std::memory_order_release);
     catch_up_target_host_time = 0;
     catch_up_current_midnight = 0;
     catch_up_waiting_for_firmware_settle = false;
@@ -520,7 +526,7 @@ bool RTC::HasPersistentClock() const
 
 bool RTC::IsCatchUpActive() const
 {
-    return catch_up_target_time != 0;
+    return published_catch_up_active.load(std::memory_order_acquire);
 }
 
 bool RTC::IsCatchUpWaitingForFirmwareSettle() const
@@ -530,12 +536,12 @@ bool RTC::IsCatchUpWaitingForFirmwareSettle() const
 
 size_t RTC::CatchUpMidnightsCompleted() const
 {
-    return catch_up_midnight_index;
+    return published_catch_up_completed.load(std::memory_order_acquire);
 }
 
 size_t RTC::CatchUpMidnightsTotal() const
 {
-    return catch_up_midnights.size();
+    return published_catch_up_total.load(std::memory_order_acquire);
 }
 
 void RTC::MarkCurrentDayProcessed()
@@ -576,6 +582,7 @@ void RTC::MarkCurrentDayProcessed()
     {
         catch_up_midnight_index++;
     }
+    published_catch_up_completed.store(catch_up_midnight_index, std::memory_order_release);
 
     if (processed_catch_up_midnight)
     {
@@ -632,6 +639,9 @@ void RTC::AllowCatchUpToRun(bool value)
 void RTC::StartCatchUp(const time_t processed_midnight, const time_t target_time, const time_t target_host_time)
 {
     const time_t saved_time = virtual_time;
+    published_catch_up_active.store(false, std::memory_order_release);
+    published_catch_up_completed.store(0, std::memory_order_release);
+    published_catch_up_total.store(0, std::memory_order_release);
     DebugLog("StartCatchUp saved_time=" + DescribeTime(saved_time) +
              " processed_midnight=" + DescribeTime(processed_midnight) +
              " target_time=" + DescribeTime(target_time));
@@ -656,6 +666,7 @@ void RTC::StartCatchUp(const time_t processed_midnight, const time_t target_time
     {
         catch_up_midnights.push_back(midnight);
     }
+    published_catch_up_total.store(catch_up_midnights.size(), std::memory_order_release);
 
     if (catch_up_midnights.empty())
     {
@@ -684,6 +695,7 @@ void RTC::StartCatchUp(const time_t processed_midnight, const time_t target_time
     catch_up_target_host_time = target_host_time;
     last_time = LocalTime(virtual_time);
     initialized = true;
+    published_catch_up_active.store(true, std::memory_order_release);
     DebugLog("StartCatchUp queued_midnights=" + std::to_string(catch_up_midnights.size()) +
              " first_midnight=" + DescribeTime(catch_up_midnights.front()) +
              " start_virtual=" + DescribeTime(virtual_time));
@@ -729,6 +741,7 @@ void RTC::CycleCatchUp()
         {
             catch_up_midnight_index++;
         }
+        published_catch_up_completed.store(catch_up_midnight_index, std::memory_order_release);
 
         if (catch_up_midnight_index < catch_up_midnights.size())
         {
@@ -796,6 +809,7 @@ void RTC::CycleCatchUp()
         }
         DebugLog("catch_up_complete target_virtual=" + DescribeTime(virtual_time));
         suppress_day_week_flags_once = true;
+        published_catch_up_completed.store(catch_up_midnights.size(), std::memory_order_release);
         catch_up_target_time = 0;
         catch_up_target_host_time = 0;
         catch_up_midnights.clear();
@@ -805,6 +819,7 @@ void RTC::CycleCatchUp()
         catch_up_hold_until = {};
         catch_up_force_next_after = {};
         wall_clock_initialized = false;
+        published_catch_up_active.store(false, std::memory_order_release);
         return;
     }
 }
@@ -879,6 +894,9 @@ bool RTC::LoadEmulatorState(std::istream& stream)
     catch_up_midnights.clear();
     catch_up_midnight_index = 0;
     catch_up_target_time = 0;
+    published_catch_up_active.store(false, std::memory_order_release);
+    published_catch_up_completed.store(0, std::memory_order_release);
+    published_catch_up_total.store(0, std::memory_order_release);
     catch_up_target_host_time = 0;
     catch_up_current_midnight = 0;
     catch_up_waiting_for_firmware_settle = false;
@@ -1071,6 +1089,9 @@ void RTC::SyncVirtualTimeFromRegisters(const bool persistent_time_write)
         catch_up_midnights.clear();
         catch_up_midnight_index = 0;
         catch_up_target_time = 0;
+        published_catch_up_active.store(false, std::memory_order_release);
+        published_catch_up_completed.store(0, std::memory_order_release);
+        published_catch_up_total.store(0, std::memory_order_release);
         catch_up_target_host_time = 0;
         catch_up_current_midnight = 0;
         catch_up_waiting_for_firmware_settle = false;

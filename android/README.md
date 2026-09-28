@@ -1,0 +1,74 @@
+# PocketWalker for Android
+
+This Android port reuses the PocketWalker C++ emulation core and `.pwsav`
+container. It runs the emulator with an Android foreground health service,
+holds a partial wake lock while active, and feeds the phone accelerometer into
+the emulated BMA150 accelerometer used by the original Pokewalker firmware.
+
+The foreground service detects physical motion peaks and uses them to open a
+short emulated BMA150 walking window. The original firmware still performs the
+step counting at its normal pace. Sensor input continues while the app is
+behind another app or the screen is off.
+
+## ROM and save files
+
+On first launch, select `rom.bin`, then either select an existing `rom.pwsav` or
+start a new game. For a new game, the app first attempts to create `rom.pwsav`
+beside the ROM. Some Android document providers require a one-time Create File
+confirmation before they grant access to the new save. ROM and save selections
+can be changed independently from the settings button in the top-right corner.
+The settings dialog shows both current document paths.
+
+The emulator works from a private local mirror for performance. It atomically
+loads the selected files into that mirror, saves a complete `rom.pwsav` there,
+and then copies the result back to the selected save document. The emulator
+keeps running when the app is in the background or the screen is off. Closing
+the app saves the current state to the selected `rom.pwsav` and stops the
+background service. A checkpoint is also written every 60 seconds while active.
+
+## RTC behavior
+
+The Android build uses the same `.pwsav` RTC metadata and firmware rollover
+replay as the desktop build. If continuous emulation was stopped, the next
+launch compares the saved RTC metadata with the phone's current date and time
+and shows catch-up progress before enabling the controls.
+
+## Infrared networking
+
+The main screen provides separate Connect melonDS and Connect Peer Play
+buttons. The settings dialog keeps the optional melonDS PC address override:
+
+- Connect melonDS makes the phone a TCP client. It first checks `127.0.0.1`
+  for melonDS running on the same Android device, then tries the optional saved
+  PC address and local-network discovery on port 8081. The address field can be
+  left empty for automatic discovery.
+- Automatic Peer Play discovers other Android PocketWalker instances on the
+  same local network. Two devices elect their roles automatically and exchange
+  the original emulated IR byte stream. Once paired, their busy advertisements
+  keep a third instance out of that session.
+- Tapping the active connection button again disables local IR networking.
+
+The PC can be connected to the router over Ethernet while the phone uses Wi-Fi.
+Both devices only need to be reachable on the same local network.
+
+## Current test build
+
+- Android 10 or newer
+- ARM64 phone
+- Physical Activity permission used by the continuous health service
+- Persistent notification while continuous emulation is active
+- Native emulator core compiled with Release optimizations
+- Batched Android CPU scheduling with cycle-accurate real-time pacing
+- Thread-safe LCD snapshots and a responsive Pokewalker-shaped interface
+- Phone motion mapped to a firmware-counted emulated BMA150 walking window
+- Step detection performed by the original Pokewalker firmware
+- TCP connection to an IR-capable melonDS build over the local network
+- Automatic two-phone discovery and Peer Play role selection
+
+Some Android manufacturers can still freeze foreground services when the app's
+battery setting is Restricted. Use the system default or Unrestricted setting
+if background execution is paused by the phone.
+
+This remains a hardware-test build. Verify button responsiveness, RTC catch-up,
+and walking behavior on a physical phone before relying on it for a long
+walking session.

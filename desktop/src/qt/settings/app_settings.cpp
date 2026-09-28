@@ -7,7 +7,13 @@ AppSettings AppSettings::instance = {};
 
 std::string AppSettings::settingsPath()
 {
+#ifdef Q_OS_ANDROID
+    const QString directory = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
+    QDir().mkpath(directory);
+    return QDir(directory).filePath("settings.json").toStdString();
+#else
     return "./settings.json";
+#endif
 }
 
 void AppSettings::load()

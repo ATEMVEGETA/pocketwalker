@@ -1,7 +1,6 @@
 #include "ssd1854.h"
 
 #include <algorithm>
-#include <print>
 
 #include "core/utils/logger.h"
 
@@ -23,7 +22,10 @@ void SSD1854::Receive(uint8_t data)
 
         const uint16_t address = (page * SSD1854_TOTAL_COLUMNS * SSD1854_COLUMN_SIZE) + (column * SSD1854_COLUMN_SIZE) +offset;
 
-        draw_info.vram.Write8(address, data);
+        {
+            std::scoped_lock lock(draw_info_mutex);
+            draw_info.vram.Write8(address, data);
+        }
 
         if (offset == 1)
             column++;
@@ -39,11 +41,17 @@ void SSD1854::Receive(uint8_t data)
             HandleCommand(data);
             break;
         case SSD1854State::SET_CONTRAST:
-            draw_info.contrast = data;
+            {
+                std::scoped_lock lock(draw_info_mutex);
+                draw_info.contrast = data;
+            }
             state = SSD1854State::IDLE;
             break;
         case SSD1854State::SET_PAGE_OFFSET:
-            draw_info.page_offset = std::clamp(data / 8, 0, 14);
+            {
+                std::scoped_lock lock(draw_info_mutex);
+                draw_info.page_offset = std::clamp(data / 8, 0, 14);
+            }
             state = SSD1854State::IDLE;
             break;
         }
@@ -53,6 +61,12 @@ void SSD1854::Receive(uint8_t data)
 uint8_t SSD1854::Transmit()
 {
     return 0xFF;
+}
+
+SSD1854DrawInfo SSD1854::GetDrawInfoSnapshot() const
+{
+    std::scoped_lock lock(draw_info_mutex);
+    return draw_info;
 }
 
 void SSD1854::HandleCommand(uint8_t data)
@@ -84,12 +98,18 @@ void SSD1854::HandleCommand(uint8_t data)
     }
     else if (data == SSD1854_CMD_POWER_SAVE_ON)
     {
-        draw_info.power_save_mode = true;
+        {
+            std::scoped_lock lock(draw_info_mutex);
+            draw_info.power_save_mode = true;
+        }
         state = SSD1854State::IDLE;
     }
     else if (data == SSD1854_CMD_POWER_SAVE_OFF)
     {
-        draw_info.power_save_mode = false;
+        {
+            std::scoped_lock lock(draw_info_mutex);
+            draw_info.power_save_mode = false;
+        }
         state = SSD1854State::IDLE;
     }
     else if (data == SSD1854_CMD_RESET)
@@ -97,9 +117,12 @@ void SSD1854::HandleCommand(uint8_t data)
         column = 0;
         offset = 0;
         page = 0;
-        draw_info.contrast = 20;
-        draw_info.page_offset = 0;
-        draw_info.power_save_mode = false;
+        {
+            std::scoped_lock lock(draw_info_mutex);
+            draw_info.contrast = 20;
+            draw_info.page_offset = 0;
+            draw_info.power_save_mode = false;
+        }
         state = SSD1854State::IDLE;
     }
     else

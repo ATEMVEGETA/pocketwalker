@@ -1,5 +1,6 @@
 #pragma once
 #include <istream>
+#include <mutex>
 #include <ostream>
 
 #include "core/memory/memory.h"
@@ -53,6 +54,7 @@ public:
 
     void Receive(uint8_t data) override;
     uint8_t Transmit() override;
+    SSD1854DrawInfo GetDrawInfoSnapshot() const;
     void SaveEmulatorState(std::ostream& stream) const;
     bool LoadEmulatorState(std::istream& stream);
 
@@ -68,4 +70,5 @@ private:
     uint8_t page = 0;
 
     bool is_data_mode = false;
+    mutable std::mutex draw_info_mutex;
 };

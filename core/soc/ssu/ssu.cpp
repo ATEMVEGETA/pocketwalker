@@ -1,7 +1,6 @@
 #include "ssu.h"
 
 #include <array>
-#include <print>
 
 #include "core/soc/defines.h"
 

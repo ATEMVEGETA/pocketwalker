@@ -3,7 +3,6 @@
 #include <array>
 #include <cstdint>
 #include <memory>
-#include <print>
 #include <thread>
 
 #include "defines.h"

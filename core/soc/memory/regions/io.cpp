@@ -1,6 +1,5 @@
 #include "io.h"
 
-#include <print>
 
 uint8_t IO::Read(uint16_t address)
 {

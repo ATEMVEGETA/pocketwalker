@@ -8,3 +8,10 @@ release
 # Personal
 roms
 docs
+.tools/
+.gradle/
+.android/
+.adbhome/
+aqtinstall.log
+android/build-arm64/
+android/output/

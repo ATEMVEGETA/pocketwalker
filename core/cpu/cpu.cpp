@@ -1,6 +1,5 @@
 #include "cpu.h"
 
-#include <print>
 
 #include "core/utils/logger.h"
 #include "instructions/set.h"

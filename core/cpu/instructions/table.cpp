@@ -1,6 +1,6 @@
 #include "table.h"
 
-#include <print>
+#include <cstdio>
 
 #include "../cpu.h"
 
@@ -73,6 +73,7 @@ const Instruction* InstructionTable::Decode(const CPU& cpu) const
     if (const auto* instr = Lookup(first, second))
         return instr;
 
-    std::println("Invalid Instruction at 0x{:04X}: 0x{:02X} 0x{:02X}", cpu.reg.PC, first, second);
+    std::fprintf(stderr, "Invalid Instruction at 0x%04X: 0x%02X 0x%02X\n",
+                 cpu.reg.PC, first, second);
     exit(1);
 }

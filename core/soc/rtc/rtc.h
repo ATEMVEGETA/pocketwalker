@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 #include <chrono>
 #include <ctime>
 #include <filesystem>
@@ -73,6 +74,9 @@ private:
     bool catch_up_allowed_to_run = false;
     bool catch_up_waiting_for_firmware_settle = false;
     bool suppress_day_week_flags_once = false;
+    std::atomic<bool> published_catch_up_active = false;
+    std::atomic<size_t> published_catch_up_completed = 0;
+    std::atomic<size_t> published_catch_up_total = 0;
     std::chrono::steady_clock::time_point last_wall_tick = {};
     std::chrono::steady_clock::time_point ignore_rtc_writes_until = {};
     std::chrono::steady_clock::time_point catch_up_hold_until = {};

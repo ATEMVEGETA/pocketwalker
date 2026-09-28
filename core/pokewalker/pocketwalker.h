@@ -40,6 +40,10 @@ public:
     void Stop();
 
     void UseSyntheticSteps(bool value);
+    void UseExternalAccelerometer(bool value);
+    void SetExternalAcceleration(float x, float y, float z);
+    void PulseExternalMotion();
+    std::string GetMotionDiagnostics() const;
     void UseFastMode(bool value);
     void SetBypassPowerSave(bool value);
     void SetWatts(uint16_t value);
@@ -52,6 +56,7 @@ public:
     void ReceiveIR(uint8_t data);
 
     SSD1854DrawInfo* GetDrawInfo();
+    SSD1854DrawInfo GetDrawInfoSnapshot() const;
 
     void PressButton(ButtonType button) const;
     void ReleaseButton(ButtonType button) const;
