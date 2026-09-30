@@ -22,9 +22,15 @@ public class PocketWalkerService extends Service implements SensorEventListener 
 
     private SensorManager sensorManager;
     private Sensor motionSensor;
+    private Sensor wakeStepSensor;
     private PowerManager.WakeLock wakeLock;
     private WifiManager.MulticastLock multicastLock;
     private long lastMotionPulseNanos;
+    private boolean sensorIncludesGravity;
+    private boolean gravityInitialized;
+    private float gravityX;
+    private float gravityY;
+    private float gravityZ;
     private static final float MOTION_PEAK_THRESHOLD = 2.2f;
     private static final long MOTION_PULSE_COOLDOWN_NANOS = 350_000_000L;
     private static native boolean nativeSetMotionEnabled(boolean enabled);
@@ -76,10 +82,33 @@ public class PocketWalkerService extends Service implements SensorEventListener 
             return;
 
         if (motionSensor == null) {
-            motionSensor = sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION);
+            motionSensor = sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION, true);
+            if (motionSensor == null)
+                motionSensor = sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION);
+            if (motionSensor == null) {
+                motionSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER, true);
+                if (motionSensor == null)
+                    motionSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
+            }
             if (motionSensor == null)
                 return;
-            sensorManager.registerListener(this, motionSensor, SensorManager.SENSOR_DELAY_GAME, 0);
+            sensorIncludesGravity = motionSensor.getType() == Sensor.TYPE_ACCELEROMETER;
+            boolean registered = sensorManager.registerListener(
+                this, motionSensor, SensorManager.SENSOR_DELAY_GAME, 0);
+            if (!registered) {
+                motionSensor = null;
+                return;
+            }
+        }
+
+        if (wakeStepSensor == null) {
+            wakeStepSensor = sensorManager.getDefaultSensor(Sensor.TYPE_STEP_DETECTOR, true);
+            if (wakeStepSensor != null) {
+                boolean registered = sensorManager.registerListener(
+                    this, wakeStepSensor, SensorManager.SENSOR_DELAY_NORMAL, 0);
+                if (!registered)
+                    wakeStepSensor = null;
+            }
         }
 
         nativeSetMotionEnabled(true);
@@ -87,15 +116,38 @@ public class PocketWalkerService extends Service implements SensorEventListener 
 
     @Override
     public void onSensorChanged(SensorEvent event) {
-        if (event.sensor.getType() != Sensor.TYPE_LINEAR_ACCELERATION)
+        if (event.sensor.getType() == Sensor.TYPE_STEP_DETECTOR) {
+            nativeOnMotionPulse();
+            return;
+        }
+
+        if (event.sensor.getType() != Sensor.TYPE_LINEAR_ACCELERATION &&
+            event.sensor.getType() != Sensor.TYPE_ACCELEROMETER)
             return;
 
         float x = event.values[0];
         float y = event.values[1];
         float z = event.values[2];
 
-        nativeOnAcceleration(x, y, z);
+        if (sensorIncludesGravity) {
+            if (!gravityInitialized) {
+                gravityX = x;
+                gravityY = y;
+                gravityZ = z;
+                gravityInitialized = true;
+            }
+            final float alpha = 0.8f;
+            gravityX = alpha * gravityX + (1.0f - alpha) * x;
+            gravityY = alpha * gravityY + (1.0f - alpha) * y;
+            gravityZ = alpha * gravityZ + (1.0f - alpha) * z;
+            x -= gravityX;
+            y -= gravityY;
+            z -= gravityZ;
+        }
+
         float magnitude = (float)Math.sqrt(x * x + y * y + z * z);
+        nativeOnAcceleration(x, y, z);
+
         long now = event.timestamp;
         if (magnitude >= MOTION_PEAK_THRESHOLD &&
             now - lastMotionPulseNanos >= MOTION_PULSE_COOLDOWN_NANOS) {
@@ -113,6 +165,8 @@ public class PocketWalkerService extends Service implements SensorEventListener 
         nativeSetMotionEnabled(false);
         if (sensorManager != null)
             sensorManager.unregisterListener(this);
+        wakeStepSensor = null;
+        motionSensor = null;
         if (wakeLock != null && wakeLock.isHeld())
             wakeLock.release();
         if (multicastLock != null && multicastLock.isHeld())
@@ -154,7 +208,7 @@ public class PocketWalkerService extends Service implements SensorEventListener 
 
         return builder
             .setContentTitle("PocketWalker is active")
-            .setContentText("Clock and phone motion sensor are running")
+            .setContentText("Clock and accelerometer are running")
             .setSmallIcon(android.R.drawable.ic_media_play)
             .setContentIntent(pending)
             .setOngoing(true)

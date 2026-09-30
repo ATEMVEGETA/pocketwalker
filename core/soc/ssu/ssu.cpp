@@ -149,6 +149,7 @@ void SSU::Cycle(uint8_t cycles)
     if (peripheral == nullptr)
         return;
 
+    bool byte_transferred = false;
     if (SSER.TE)
     {
         if (!SSSR.TDRE)
@@ -156,6 +157,7 @@ void SSU::Cycle(uint8_t cycles)
             peripheral->Receive(SSTDR);
             SSSR.TDRE = true;
             SSSR.TEND = false;
+            byte_transferred = true;
         }
         else
         {
@@ -165,7 +167,9 @@ void SSU::Cycle(uint8_t cycles)
 
     if (SSER.RE)
     {
-        if (!SSSR.RDRF)
+        const bool receive_ready = byte_transferred ||
+                                   !peripheral->ReceiveRequiresTransfer();
+        if (!SSSR.RDRF && receive_ready)
         {
             SSRDR = peripheral->Transmit();
             SSSR.RDRF = true;

@@ -4,7 +4,8 @@
 
 struct AccelSample
 {
-    int8_t x, y, z;
+    // Signed BMA150 values in the native 10-bit +/-2 g range (256 LSB/g).
+    int16_t x, y, z;
 };
 
 class SampleProvider

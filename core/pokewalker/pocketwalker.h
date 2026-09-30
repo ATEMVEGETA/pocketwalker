@@ -42,7 +42,7 @@ public:
     void UseSyntheticSteps(bool value);
     void UseExternalAccelerometer(bool value);
     void SetExternalAcceleration(float x, float y, float z);
-    void PulseExternalMotion();
+    bool PulseExternalMotion();
     std::string GetMotionDiagnostics() const;
     void UseFastMode(bool value);
     void SetBypassPowerSave(bool value);
@@ -123,4 +123,10 @@ private:
     bool last_logged_synthetic_steps = false;
     bool last_logged_synthetic_sleep_probe = false;
     std::chrono::steady_clock::time_point peer_cooldown_normalize_at = {};
+    std::atomic<uint64_t> motion_batches_started = 0;
+    std::atomic<uint64_t> motion_batches_accepted = 0;
+    std::atomic<uint64_t> motion_batches_rejected = 0;
+    std::atomic<uint64_t> motion_step_awards = 0;
+    std::atomic<uint16_t> motion_last_candidate_scaled = 0;
+    std::atomic<uint16_t> motion_last_spectrum_maximum = 0;
 };

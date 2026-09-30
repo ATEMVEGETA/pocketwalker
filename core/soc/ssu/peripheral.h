@@ -17,6 +17,7 @@ public:
     virtual uint8_t Transmit() = 0;
     virtual void Cycle(uint32_t cycles) {}
     virtual void Reset() {}
+    virtual bool ReceiveRequiresTransfer() const { return false; }
 
     EventHandler<PinEvent> OnInputPin;
     EventHandler<PinEvent> OnOutputPin;

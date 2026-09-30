@@ -5,10 +5,13 @@ container. It runs the emulator with an Android foreground health service,
 holds a partial wake lock while active, and feeds the phone accelerometer into
 the emulated BMA150 accelerometer used by the original Pokewalker firmware.
 
-The foreground service detects physical motion peaks and uses them to open a
-short emulated BMA150 walking window. The original firmware still performs the
-step counting at its normal pace. Sensor input continues while the app is
-behind another app or the screen is off.
+The foreground service detects sustained phone motion and supplies a bounded,
+zero-centered acceleration waveform to the emulated BMA150. A hardware wake-up
+step detector keeps that waveform active for background walking on phones whose
+continuous accelerometer sleeps with the screen. The emulated sensor handles
+sleep, wake-up delay, conversion latching, data-ready interrupts, and 10-bit
+data registers. The original firmware owns its 64-sample history, step
+classification, and step pacing.
 
 ## ROM and save files
 
@@ -60,7 +63,7 @@ Both devices only need to be reachable on the same local network.
 - Native emulator core compiled with Release optimizations
 - Batched Android CPU scheduling with cycle-accurate real-time pacing
 - Thread-safe LCD snapshots and a responsive Pokewalker-shaped interface
-- Phone motion mapped to a firmware-counted emulated BMA150 walking window
+- Phone acceleration exposed as native 10-bit BMA150 samples without firmware RAM writes
 - Step detection performed by the original Pokewalker firmware
 - TCP connection to an IR-capable melonDS build over the local network
 - Automatic two-phone discovery and Peer Play role selection

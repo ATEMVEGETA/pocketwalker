@@ -146,7 +146,7 @@ PocketWalker::PocketWalker(RomBuffer rom_buffer)
     this->soc->ssu->RegisterPeripheral(this->bma150, SSU_ADDR_PDR9, 0);
     this->soc->ssu->RegisterOutputPin(this->bma150, BMA150_PIN_INT, SSU_ADDR_PDRB, 1);
 
-    this->step_provider = std::make_shared<StepSampleProvider>(this->soc->memory);
+    this->step_provider = std::make_shared<StepSampleProvider>();
     this->bma150->SetSampleProvider(this->step_provider);
 
     this->m95512 = std::make_shared<M95512>();
@@ -203,6 +203,31 @@ void PocketWalker::Start()
 
         for (uint16_t i = 0; i < batch_size && this->is_running && !this->is_paused; i++)
         {
+            const uint16_t exec_pc = soc->cpu->reg.PC;
+            switch (exec_pc)
+            {
+                case 0x945A:
+                    motion_batches_started.fetch_add(1, std::memory_order_relaxed);
+                    break;
+                case 0x970C:
+                    motion_last_candidate_scaled.store(
+                        *soc->cpu->reg.Reg16(0), std::memory_order_relaxed);
+                    motion_last_spectrum_maximum.store(
+                        *soc->cpu->reg.Reg16(9), std::memory_order_relaxed);
+                    break;
+                case 0x971E:
+                    motion_batches_rejected.fetch_add(1, std::memory_order_relaxed);
+                    break;
+                case 0x9732:
+                    motion_batches_accepted.fetch_add(1, std::memory_order_relaxed);
+                    break;
+                case 0x95D0:
+                    motion_step_awards.fetch_add(1, std::memory_order_relaxed);
+                    break;
+                default:
+                    break;
+            }
+
             const uint8_t cycles = soc->Cycle();
             elapsed_cycles += cycles;
             CyclePeripherals(cycles);
@@ -327,26 +352,94 @@ void PocketWalker::SetExternalAcceleration(const float x, const float y, const f
 {
     const auto convert = [](const float acceleration) {
         constexpr float STANDARD_GRAVITY = 9.80665f;
-        constexpr float BMA150_MSB_COUNTS_PER_G = 64.0f;
+        constexpr float BMA150_COUNTS_PER_G = 256.0f;
         const long value = std::lround(
-            (acceleration / STANDARD_GRAVITY) * BMA150_MSB_COUNTS_PER_G);
-        return static_cast<int8_t>(std::clamp(value, -128L, 127L));
+            (acceleration / STANDARD_GRAVITY) * BMA150_COUNTS_PER_G);
+        return static_cast<int16_t>(std::clamp(value, -512L, 511L));
     };
 
     step_provider->SetExternalSample(convert(x), convert(y), convert(z));
 }
 
-void PocketWalker::PulseExternalMotion()
+bool PocketWalker::PulseExternalMotion()
 {
-    const bool started = step_provider->PulseExternalMotion();
-    if (started)
-        bma150->TriggerMotionInterrupt();
+    return step_provider->PulseExternalMotion();
 }
 
 std::string PocketWalker::GetMotionDiagnostics() const
 {
     const auto sample = step_provider->ExternalSample();
     const auto output_sample = step_provider->ExternalOutputSample();
+    const uint8_t next_sample = soc->memory->Read8(0xF7AE) & 0x3F;
+    const uint8_t latest_sample = (next_sample + 0x3F) & 0x3F;
+    const uint8_t prior_sample = (next_sample + 0x3E) & 0x3F;
+    const auto signed_sample = [this](const uint16_t address) {
+        return static_cast<int>(static_cast<int8_t>(soc->memory->Read8(address)));
+    };
+    const int latest_x = signed_sample(static_cast<uint16_t>(0xF826 + latest_sample));
+    const int latest_y = signed_sample(static_cast<uint16_t>(0xF866 + latest_sample));
+    const int latest_z = signed_sample(static_cast<uint16_t>(0xF8A6 + latest_sample));
+    const int prior_x = signed_sample(static_cast<uint16_t>(0xF826 + prior_sample));
+    const int prior_y = signed_sample(static_cast<uint16_t>(0xF866 + prior_sample));
+    const int prior_z = signed_sample(static_cast<uint16_t>(0xF8A6 + prior_sample));
+    const int firmware_activity = std::abs(latest_x - prior_x) +
+                                  std::abs(latest_y - prior_y) +
+                                  std::abs(latest_z - prior_z);
+    uint16_t firmware_spectrum_maximum = 0;
+    uint16_t firmware_walking_candidate = 0;
+    uint8_t firmware_spectrum_bin = 0;
+    uint8_t firmware_walking_bin = 0;
+    for (uint16_t bin = 1; bin <= 29; bin++)
+    {
+        const uint16_t magnitude = soc->memory->Read16(
+            static_cast<uint16_t>(0xF7E6 + bin * sizeof(uint16_t)));
+        if (magnitude > firmware_spectrum_maximum)
+        {
+            firmware_spectrum_maximum = magnitude;
+            firmware_spectrum_bin = static_cast<uint8_t>(bin);
+        }
+        if (bin >= 5 && bin <= 14 && magnitude > firmware_walking_candidate)
+        {
+            firmware_walking_candidate = magnitude;
+            firmware_walking_bin = static_cast<uint8_t>(bin);
+        }
+    }
+
+    uint32_t host_spectrum_maximum = 0;
+    uint32_t host_walking_candidate = 0;
+    uint8_t host_spectrum_bin = 0;
+    uint8_t host_walking_bin = 0;
+    constexpr double TWO_PI = 6.28318530717958647692;
+    for (uint8_t bin = 1; bin < 30; bin++)
+    {
+        double magnitude = 0.0;
+        for (const uint16_t axis_address : {uint16_t{0xF826}, uint16_t{0xF866}, uint16_t{0xF8A6}})
+        {
+            double real = 0.0;
+            double imaginary = 0.0;
+            for (uint8_t sample_index = 0; sample_index < 64; sample_index++)
+            {
+                const auto value = static_cast<int8_t>(
+                    soc->memory->Read8(static_cast<uint16_t>(axis_address + sample_index)));
+                const double angle = TWO_PI * static_cast<double>(bin) * sample_index / 64.0;
+                real += static_cast<double>(value) * std::cos(angle);
+                imaginary += static_cast<double>(value) * std::sin(angle);
+            }
+            magnitude += std::abs(real) + std::abs(imaginary);
+        }
+
+        const uint32_t rounded = static_cast<uint32_t>(std::lround(magnitude));
+        if (rounded > host_spectrum_maximum)
+        {
+            host_spectrum_maximum = rounded;
+            host_spectrum_bin = bin;
+        }
+        if (bin >= 5 && bin <= 14 && rounded > host_walking_candidate)
+        {
+            host_walking_candidate = rounded;
+            host_walking_bin = bin;
+        }
+    }
     return "bma_reads=" + std::to_string(step_provider->ExternalReadCount()) +
            " sample=" + std::to_string(sample.x) + "," +
            std::to_string(sample.y) + "," + std::to_string(sample.z) +
@@ -357,19 +450,44 @@ std::string PocketWalker::GetMotionDiagnostics() const
            " bma_motion_duration=" + std::to_string(bma150->ReadRegister(0x11)) +
            " bma_range_bw=" + std::to_string(bma150->ReadRegister(0x14)) +
            " bma_mode_cfg=" + std::to_string(bma150->ReadRegister(0x15)) +
+           " bma_protected_1e=" + std::to_string(bma150->ReadRegister(0x1E)) +
            " bma_enabled=" + (step_provider->is_enabled.load() ? std::string("true") : "false") +
            " motion_active=" + (step_provider->ExternalMotionActive() ? std::string("true") : "false") +
-           " motion_primes=" + std::to_string(step_provider->ExternalMotionPrimeCount()) +
+           " motion_pulses=" + std::to_string(step_provider->ExternalMotionPulseCount()) +
+           " motion_remaining_ms=" + std::to_string(step_provider->ExternalMotionRemainingMilliseconds()) +
            " motion_delta=" + std::to_string(step_provider->ExternalMaximumDelta()) +
            " motion_magnitude2=" + std::to_string(step_provider->ExternalMagnitudeSquared()) +
-           " detected_steps=" + std::to_string(step_provider->ExternalDetectedStepCount()) +
-           " firmware_steps=" + std::to_string(step_provider->ExternalFirmwareStepCount()) +
-           " motion_remaining_ms=" + std::to_string(step_provider->ExternalMotionRemainingMilliseconds()) +
+           " bma_conversions=" + std::to_string(bma150->ConversionCount()) +
+           " bma_interrupts=" + std::to_string(bma150->InterruptCount()) +
+           " bma_bursts=" + std::to_string(bma150->BurstReadCount()) +
+           " bma_writes=" + std::to_string(bma150->ControlWriteCount()) +
            " bma_control=" + std::to_string(*bma150->control1) +
-           " firmware_samples=" + std::to_string(soc->memory->Read8(PW_ADDR_ACCEL_SAMPLE_COUNT)) +
-           " not_walking=" + std::to_string(soc->memory->Read8(PW_ADDR_IS_NOT_WALKING)) +
+           " firmware_sample_slot=" + std::to_string(next_sample) +
+           " firmware_latest=" + std::to_string(latest_x) + "," +
+           std::to_string(latest_y) + "," + std::to_string(latest_z) +
+           " firmware_activity=" + std::to_string(firmware_activity) +
+           " firmware_fft_candidate=" + std::to_string(firmware_walking_bin) + ":" +
+           std::to_string(firmware_walking_candidate) +
+           " firmware_fft_max=" + std::to_string(firmware_spectrum_bin) + ":" +
+           std::to_string(firmware_spectrum_maximum) +
+           " host_fft_candidate=" + std::to_string(host_walking_bin) + ":" +
+           std::to_string(host_walking_candidate) +
+           " host_fft_max=" + std::to_string(host_spectrum_bin) + ":" +
+           std::to_string(host_spectrum_maximum) +
+           " firmware_batches=" + std::to_string(motion_batches_started.load(std::memory_order_relaxed)) +
+           " firmware_accepted=" + std::to_string(motion_batches_accepted.load(std::memory_order_relaxed)) +
+           " firmware_rejected=" + std::to_string(motion_batches_rejected.load(std::memory_order_relaxed)) +
+           " firmware_awards=" + std::to_string(motion_step_awards.load(std::memory_order_relaxed)) +
+           " firmware_compare_scaled=" + std::to_string(motion_last_candidate_scaled.load(std::memory_order_relaxed)) +
+           " firmware_compare_max=" + std::to_string(motion_last_spectrum_maximum.load(std::memory_order_relaxed)) +
+           " firmware_not_walking=" + std::to_string(soc->memory->Read8(0xF8EF)) +
+           " firmware_events=" + std::to_string(soc->memory->Read8(0xF7B5)) +
+           " firmware_flags=" + std::to_string(soc->memory->Read8(0xF7B6)) +
            " session_steps=" + std::to_string(soc->memory->Read32(PW_ADDR_SESSION_STEPS)) +
-           " cpu_sleep=" + (soc->cpu->sleep ? std::string("true") : "false");
+           " total_steps=" + std::to_string(soc->memory->Read32(PW_ADDR_TOTAL_STEPS)) +
+           " cpu_sleep=" + (soc->cpu->sleep ? std::string("true") : "false") +
+           " ienr1=" + std::to_string(soc->interrupts->IENR1.VALUE) +
+           " irr1=" + std::to_string(soc->interrupts->IRR1.VALUE);
 }
 
 void PocketWalker::UseFastMode(bool value)

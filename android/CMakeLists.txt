@@ -51,8 +51,8 @@ set_target_properties(pocketwalker_android PROPERTIES
     QT_ANDROID_PACKAGE_NAME "org.atemvegeta.pocketwalker"
     QT_ANDROID_MIN_SDK_VERSION 29
     QT_ANDROID_TARGET_SDK_VERSION 36
-    QT_ANDROID_VERSION_CODE 31
-    QT_ANDROID_VERSION_NAME "0.31.0"
+    QT_ANDROID_VERSION_CODE 50
+    QT_ANDROID_VERSION_NAME "0.50.0"
 )
 
 qt_finalize_executable(pocketwalker_android)
