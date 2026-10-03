@@ -6,7 +6,6 @@
 #include <ctime>
 #include <fstream>
 #include <filesystem>
-#include <iomanip>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -215,6 +214,18 @@ std::string ReadRtcLastActiveDateFromBytes(const ByteBuffer& rtc)
     return FormatLocalDate(static_cast<std::time_t>(saved_host_time));
 }
 
+bool IsRtcInitializedFromBytes(const ByteBuffer& rtc)
+{
+    if (rtc.size() < 8)
+        return false;
+
+    const std::string magic(reinterpret_cast<const char*>(rtc.data()), 8);
+    if (magic == "PWRTC002")
+        return true;
+
+    return magic == "PWRTC003" && rtc.size() >= 33 && rtc[32] != 0;
+}
+
 uint32_t ReadU32BEFromFile(const std::string& path, const std::streamoff offset)
 {
     std::ifstream file(path, std::ios::binary);
@@ -331,21 +342,6 @@ bool StateRamDaysMatchSave(const std::string& save_path, const std::string& stat
     return ReadDaysFromEepromFile(save_path) == ReadDaysFromStateRam(state_path);
 }
 
-std::string FormatDebugTime()
-{
-    const std::time_t now = std::time(nullptr);
-    std::tm local = {};
-#ifdef _WIN32
-    localtime_s(&local, &now);
-#else
-    localtime_r(&now, &local);
-#endif
-
-    std::ostringstream stream;
-    stream << std::put_time(&local, "%Y-%m-%d %H:%M:%S");
-    return stream.str();
-}
-
 std::string FormatLocalDate(const std::time_t time)
 {
     if (time <= 0)
@@ -402,26 +398,16 @@ std::string ReadRtcLastActiveDate(const std::string& save_path)
 
 void AppendRtcDebug(const std::string& save_path, const std::string& message)
 {
-    if (save_path.empty())
-        return;
-
-    const std::filesystem::path save_directory = std::filesystem::path(save_path).parent_path();
-    if (!std::filesystem::exists(save_directory / "pocketwalker_enable_debug_log.txt"))
-        return;
-
-    const std::filesystem::path log_path = save_directory / "pocketwalker_rtc_debug.log";
-    std::ofstream log(log_path, std::ios::app);
-    if (!log)
-        return;
-
-    log << FormatDebugTime() << " | context | " << message << '\n';
+    (void)save_path;
+    (void)message;
 }
 
 bool LoadPwsavRuntimeState(PocketWalker& emu, const std::string& save_path)
 {
     PwsavData pwsav = {};
     const std::filesystem::path pwsav_path = PwsavPathForSavePath(save_path);
-    if (!ReadPwsavFile(pwsav_path, pwsav) || !pwsav.has_state || !pwsav.has_rtc)
+    if (!ReadPwsavFile(pwsav_path, pwsav) || !pwsav.has_state || !pwsav.has_rtc ||
+        !IsRtcInitializedFromBytes(pwsav.rtc))
         return false;
 
     const bool eeprom_matches = StateEepromMatchesSave(pwsav.eeprom, pwsav.state);
@@ -503,6 +489,7 @@ bool WritePwsavFile(const std::string& save_path, const PocketWalker& emu)
 
     return true;
 }
+
 }
 
 EmulatorContext::EmulatorContext(const std::string& rom_path, const std::string& save_path,
@@ -561,7 +548,6 @@ EmulatorContext::EmulatorContext(const std::string& rom_path, const std::string&
         if (audio_enabled.load(std::memory_order_relaxed))
             audio->PushSample(info);
     });
-
     if (!defer_network_start)
         startNetwork();
 

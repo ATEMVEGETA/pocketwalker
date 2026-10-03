@@ -1,5 +1,9 @@
 #include "m95512.h"
 
+M95512::M95512()
+{
+    eeprom.fill(0xFF);
+}
 
 void M95512::Receive(uint8_t data)
 {

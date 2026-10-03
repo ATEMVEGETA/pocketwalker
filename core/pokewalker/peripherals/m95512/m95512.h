@@ -29,6 +29,7 @@ class M95512 : public Peripheral
 {
 
 public:
+    M95512();
     void Receive(uint8_t data) override;
     uint8_t Transmit() override;
     void Reset() override;

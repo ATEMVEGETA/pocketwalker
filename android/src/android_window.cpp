@@ -2,8 +2,11 @@
 
 #include <algorithm>
 
+
 #include <QApplication>
+#include <QCloseEvent>
 #include <QDialog>
+#include <QDebug>
 #include <QDir>
 #include <QFileInfo>
 #include <QFrame>
@@ -114,7 +117,7 @@ AndroidWindow::AndroidWindow(QWidget* parent) : QMainWindow(parent)
     content_stack->addWidget(rtc_page);
     content_stack->setCurrentWidget(display);
 
-    status = new QLabel("Select rom.bin to begin", root);
+    status = new QLabel("Select the folder containing rom.bin to begin", root);
     status->setAlignment(Qt::AlignCenter);
     status->setWordWrap(true);
     status->setStyleSheet("color: #c9cdd2; font-size: 14px;");
@@ -198,10 +201,8 @@ AndroidWindow::AndroidWindow(QWidget* parent) : QMainWindow(parent)
 
     setControlsEnabled(false);
     updateActionStates();
-    if (hasSelectedRom() && hasSelectedSave())
-        loadSelectedFiles();
-    else if (hasSelectedRom())
-        QTimer::singleShot(0, this, &AndroidWindow::promptForSave);
+    if (hasSelectedRom())
+        QTimer::singleShot(0, this, &AndroidWindow::loadSelectedFiles);
     else
         QTimer::singleShot(0, this, &AndroidWindow::chooseRomFile);
 }
@@ -209,6 +210,18 @@ AndroidWindow::AndroidWindow(QWidget* parent) : QMainWindow(parent)
 AndroidWindow::~AndroidWindow()
 {
     stopEmulator();
+}
+
+void AndroidWindow::closeEvent(QCloseEvent* event)
+{
+    if (closing)
+    {
+        event->accept();
+        return;
+    }
+
+    event->ignore();
+    QJniObject::callStaticMethod<void>(ANDROID_ACTIVITY, "showExitConfirmation", "()V");
 }
 
 void AndroidWindow::appClosing()
@@ -223,88 +236,40 @@ void AndroidWindow::appClosing()
     qApp->quit();
 }
 
+void AndroidWindow::checkpointForBackground()
+{
+    if (closing || !context)
+        return;
+
+    if (context->checkpointSave())
+        syncSaveToSelectedFile();
+}
+
 void AndroidWindow::fileSelectionFinished(const int file_type, const bool changed)
 {
     if (!changed)
     {
-        if (hasSelectedRom() && hasSelectedSave())
+        if (hasSelectedRom())
             loadSelectedFiles();
         else
-            setStatus(hasSelectedRom()
-                ? "Choose an existing rom.pwsav or start a new save"
-                : "Select rom.bin to begin");
+            setStatus("Select the folder containing rom.bin to begin");
         updateActionStates();
         return;
     }
 
     if (file_type == 1)
-        promptForSave();
-    else
         loadSelectedFiles();
 }
 
 void AndroidWindow::chooseRomFile()
 {
     QMessageBox::information(
-        this, "Select rom.bin",
-        "Choose the rom.bin firmware file on the next screen.\n\n"
-        "Canceling will keep your current ROM and save unchanged.");
+        this, "Select PocketWalker folder",
+        "Choose the folder containing rom.bin on the next screen.\n\n"
+        "PocketWalker will use rom.pwsav in the same folder, or create it there automatically.\n\n"
+        "Canceling will keep your current folder unchanged.");
     stopEmulator();
     QJniObject::callStaticMethod<void>(ANDROID_ACTIVITY, "chooseRomFile", "()V");
-}
-
-void AndroidWindow::chooseSaveFile()
-{
-    QMessageBox::information(
-        this, "Select rom.pwsav",
-        "Choose your existing rom.pwsav save file on the next screen.\n\n"
-        "Canceling will keep your current ROM and save unchanged.");
-    stopEmulator();
-    QJniObject::callStaticMethod<void>(ANDROID_ACTIVITY, "chooseSaveFile", "()V");
-}
-
-void AndroidWindow::createNewSave()
-{
-    QMessageBox::information(
-        this, "Create rom.pwsav",
-        "A new rom.pwsav will be created beside rom.bin when Android allows it. "
-        "Otherwise, choose where to create rom.pwsav on the next screen.\n\n"
-        "Canceling will keep your current ROM and save unchanged.");
-    stopEmulator();
-    QJniObject::callStaticMethod<void>(ANDROID_ACTIVITY, "createNewSave", "()V");
-}
-
-void AndroidWindow::promptForSave()
-{
-    const bool has_pending_rom = QJniObject::callStaticMethod<jboolean>(
-        ANDROID_ACTIVITY, "hasPendingRomFile", "()Z");
-    if (!hasSelectedRom() && !has_pending_rom)
-    {
-        chooseRomFile();
-        return;
-    }
-
-    QMessageBox prompt(this);
-    prompt.setWindowTitle("PocketWalker save");
-    prompt.setText("Load an existing rom.pwsav or start a new PocketWalker?");
-    QPushButton* load_existing = prompt.addButton("Load existing save", QMessageBox::AcceptRole);
-    QPushButton* start_new = prompt.addButton("Start new game", QMessageBox::ActionRole);
-    prompt.addButton(QMessageBox::Cancel);
-    prompt.exec();
-
-    if (prompt.clickedButton() == load_existing)
-        chooseSaveFile();
-    else if (prompt.clickedButton() == start_new)
-        createNewSave();
-    else
-    {
-        QJniObject::callStaticMethod<void>(ANDROID_ACTIVITY, "cancelPendingRomChange", "()V");
-        if (hasSelectedRom() && hasSelectedSave())
-            loadSelectedFiles();
-        else
-            setStatus("Choose an existing rom.pwsav or start a new save");
-        updateActionStates();
-    }
 }
 
 void AndroidWindow::showSettingsDialog()
@@ -355,26 +320,15 @@ void AndroidWindow::showSettingsDialog()
         layout->addWidget(heading);
         layout->addSpacing(4);
 
-        layout->addWidget(new QLabel("Current rom.bin path", content));
+        layout->addWidget(new QLabel("PocketWalker files", content));
         rom_path_label = new QLabel(content);
         rom_path_label->setWordWrap(true);
         rom_path_label->setTextInteractionFlags(Qt::TextSelectableByMouse);
         rom_path_label->setStyleSheet("color: #c9cdd2; padding: 0 4px 4px 4px;");
         layout->addWidget(rom_path_label);
-        auto* change_rom = new QPushButton("Change rom.bin path", content);
+        auto* change_rom = new QPushButton("Change PocketWalker folder", content);
         change_rom->setMinimumHeight(48);
         layout->addWidget(change_rom);
-
-        layout->addSpacing(6);
-        layout->addWidget(new QLabel("Current rom.pwsav path", content));
-        save_path_label = new QLabel(content);
-        save_path_label->setWordWrap(true);
-        save_path_label->setTextInteractionFlags(Qt::TextSelectableByMouse);
-        save_path_label->setStyleSheet("color: #c9cdd2; padding: 0 4px 4px 4px;");
-        layout->addWidget(save_path_label);
-        auto* change_save = new QPushButton("Change rom.pwsav path", content);
-        change_save->setMinimumHeight(48);
-        layout->addWidget(change_save);
 
         layout->addSpacing(10);
         layout->addWidget(new QLabel("melonDS PC IP address", content));
@@ -405,10 +359,6 @@ void AndroidWindow::showSettingsDialog()
             settings_dialog->close();
             chooseRomFile();
         });
-        connect(change_save, &QPushButton::clicked, this, [this] {
-            settings_dialog->close();
-            chooseSaveFile();
-        });
         connect(ir_pc_host_button, &QPushButton::clicked, this, [this] {
             const QString host = ir_pc_host_edit->text().trimmed();
             setIrPcHost(host);
@@ -420,7 +370,7 @@ void AndroidWindow::showSettingsDialog()
     settings_dialog->show();
     settings_dialog->raise();
     settings_dialog->activateWindow();
-    settings_dialog->repaint();
+    settings_dialog->update();
 }
 
 void AndroidWindow::updateSettingsDialog()
@@ -429,7 +379,6 @@ void AndroidWindow::updateSettingsDialog()
         return;
 
     rom_path_label->setText(selectedRomPath());
-    save_path_label->setText(selectedSavePath());
     const QString pc_host = irPcHost();
     if (!ir_pc_host_edit->hasFocus())
         ir_pc_host_edit->setText(pc_host);
@@ -437,11 +386,9 @@ void AndroidWindow::updateSettingsDialog()
 
 void AndroidWindow::loadSelectedFiles()
 {
-    if (!hasSelectedRom() || !hasSelectedSave())
+    if (!hasSelectedRom())
     {
-        setStatus(!hasSelectedRom()
-            ? "Select rom.bin to begin"
-            : "Choose an existing rom.pwsav or start a new save");
+        setStatus("Select the folder containing rom.bin to begin");
         updateActionStates();
         return;
     }
@@ -450,17 +397,12 @@ void AndroidWindow::loadSelectedFiles()
     if (!syncFromSelectedFiles())
     {
         const bool rom_available = hasSelectedRom();
-        const bool save_available = hasSelectedSave();
-        setStatus(!rom_available
-            ? "Select rom.bin to begin"
-            : !save_available
-                ? "Choose an existing rom.pwsav or start a new save"
-                : "The selected ROM or save file could not be read");
+        setStatus(rom_available
+            ? "rom.pwsav could not be read or created in the selected folder"
+            : "Select the folder containing rom.bin to begin");
         updateActionStates();
         if (!rom_available)
             QTimer::singleShot(0, this, &AndroidWindow::chooseRomFile);
-        else if (!save_available)
-            QTimer::singleShot(0, this, &AndroidWindow::promptForSave);
         return;
     }
 
@@ -492,7 +434,8 @@ void AndroidWindow::startEmulator()
     args.port = IR_PORT;
     args.peer_id = peerDeviceId().toStdString();
     context = std::make_unique<EmulatorContext>(
-        dataPath("rom.bin").toStdString(), dataPath("rom.sav").toStdString(), args, this, true);
+        dataPath("rom.bin").toStdString(), dataPath("rom.sav").toStdString(), args, this,
+        true);
     connect(context.get(), &EmulatorContext::networkStatusChanged, this,
             [this](const QString& message)
             {
@@ -504,7 +447,7 @@ void AndroidWindow::startEmulator()
             [this](const QString& host)
             {
                 const QJniObject java_host = QJniObject::fromString(host);
-                const QString saved_host = QJniObject::callStaticObjectMethod(
+                QJniObject::callStaticObjectMethod(
                     ANDROID_ACTIVITY, "setIrPcHost", "(Ljava/lang/String;)Ljava/lang/String;",
                     java_host.object<jstring>()).toString();
                 updateSettingsDialog();
@@ -539,7 +482,7 @@ void AndroidWindow::startEmulator()
             render_timer.start();
     }
 
-    setStatus(QString("Active - %1 / %2").arg(selectedRomLabel(), selectedSaveLabel()));
+    setStatus("Active - rom.bin / rom.pwsav");
     updateActionStates();
 }
 
@@ -561,9 +504,9 @@ void AndroidWindow::stopEmulator(const bool stop_service)
     if (stop_service)
     {
         stopBackgroundService();
-        setStatus(hasSelectedRom() && hasSelectedSave()
-            ? QString("Stopped - %1 / %2").arg(selectedRomLabel(), selectedSaveLabel())
-            : QString("Stopped - select ROM and save files from Settings"));
+        setStatus(hasSelectedRom()
+            ? QString("Stopped - rom.bin / rom.pwsav")
+            : QString("Stopped - select the PocketWalker folder from Settings"));
     }
 
     content_stack->setCurrentWidget(display);
@@ -571,13 +514,13 @@ void AndroidWindow::stopEmulator(const bool stop_service)
     updateActionStates();
 }
 
-void AndroidWindow::syncSaveToSelectedFile()
+bool AndroidWindow::syncSaveToSelectedFile()
 {
-    if (!hasSelectedSave() || !QFileInfo::exists(dataPath("rom.pwsav")))
-        return;
+    if (!hasSelectedRom() || !QFileInfo::exists(dataPath("rom.pwsav")))
+        return false;
 
     const QJniObject directory = QJniObject::fromString(dataDirectory());
-    QJniObject::callStaticMethod<jboolean>(
+    return QJniObject::callStaticMethod<jboolean>(
         ANDROID_ACTIVITY, "syncToSaveFile", "(Ljava/lang/String;)Z", directory.object<jstring>());
 }
 
@@ -612,7 +555,7 @@ void AndroidWindow::updateRtcCatchUp()
     setControlsEnabled(true);
     if (qApp->applicationState() == Qt::ApplicationActive)
         render_timer.start();
-    setStatus(QString("Active - %1 / %2").arg(selectedRomLabel(), selectedSaveLabel()));
+    setStatus("Active - rom.bin / rom.pwsav");
     updateConnectionControls();
 }
 
@@ -649,11 +592,7 @@ void AndroidWindow::updateConnectionControls()
     connect_melonds_button->setStyleSheet(style(pc_active));
     connect_peer_button->setStyleSheet(style(peer_active));
     for (QPushButton* button : {connect_melonds_button, connect_peer_button})
-    {
-        button->style()->unpolish(button);
-        button->style()->polish(button);
-        button->repaint();
-    }
+        button->update();
 
     if (!context)
         connection_status->setText("Infrared unavailable until the Pokewalker is loaded");
@@ -672,10 +611,7 @@ void AndroidWindow::updateConnectionControls()
         connection_status->setText("Searching for another PocketWalker...");
 
     if (QWidget* root = centralWidget())
-    {
         root->update();
-        QTimer::singleShot(0, root, [root] { root->repaint(); });
-    }
 }
 
 void AndroidWindow::setControlsEnabled(const bool enabled)
@@ -690,11 +626,6 @@ bool AndroidWindow::hasSelectedRom() const
     return QJniObject::callStaticMethod<jboolean>(ANDROID_ACTIVITY, "hasRomFile", "()Z");
 }
 
-bool AndroidWindow::hasSelectedSave() const
-{
-    return QJniObject::callStaticMethod<jboolean>(ANDROID_ACTIVITY, "hasSaveFile", "()Z");
-}
-
 bool AndroidWindow::syncFromSelectedFiles() const
 {
     const QJniObject directory = QJniObject::fromString(dataDirectory());
@@ -702,28 +633,10 @@ bool AndroidWindow::syncFromSelectedFiles() const
         ANDROID_ACTIVITY, "syncFromFiles", "(Ljava/lang/String;)Z", directory.object<jstring>());
 }
 
-QString AndroidWindow::selectedRomLabel() const
-{
-    return QJniObject::callStaticObjectMethod(
-        ANDROID_ACTIVITY, "selectedRomLabel", "()Ljava/lang/String;").toString();
-}
-
-QString AndroidWindow::selectedSaveLabel() const
-{
-    return QJniObject::callStaticObjectMethod(
-        ANDROID_ACTIVITY, "selectedSaveLabel", "()Ljava/lang/String;").toString();
-}
-
 QString AndroidWindow::selectedRomPath() const
 {
     return QJniObject::callStaticObjectMethod(
         ANDROID_ACTIVITY, "selectedRomPath", "()Ljava/lang/String;").toString();
-}
-
-QString AndroidWindow::selectedSavePath() const
-{
-    return QJniObject::callStaticObjectMethod(
-        ANDROID_ACTIVITY, "selectedSavePath", "()Ljava/lang/String;").toString();
 }
 
 int AndroidWindow::irConnectionMode() const
@@ -767,7 +680,6 @@ void AndroidWindow::setIrPcHost(const QString& host)
     const QString saved_host = QJniObject::callStaticObjectMethod(
         ANDROID_ACTIVITY, "setIrPcHost", "(Ljava/lang/String;)Ljava/lang/String;",
         java_host.object<jstring>()).toString();
-
     ir_network_status.clear();
     if (saved_host != previous_host && irConnectionMode() == IR_MODE_PC && context)
     {

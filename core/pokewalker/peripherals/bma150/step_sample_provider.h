@@ -9,7 +9,9 @@ static constexpr std::array<int16_t, 8> STEP_SINE_LUT = {
     0, 32, 44, 32, 0, -32, -44, -32
 };
 
-static constexpr auto EXTERNAL_MOTION_HOLD = std::chrono::milliseconds(850);
+// Motion pulses are retained only as diagnostics for Android wake sensors.
+// External acceleration itself is always exposed directly to the BMA150.
+static constexpr auto EXTERNAL_MOTION_HOLD = std::chrono::milliseconds(1100);
 
 class StepSampleProvider : public SampleProvider
 {
@@ -19,21 +21,7 @@ public:
         if (external_mode.load(std::memory_order_relaxed))
         {
             external_read_count.fetch_add(1, std::memory_order_relaxed);
-            if (!ExternalMotionActive())
-            {
-                external_output_x = 0;
-                external_output_y = 0;
-                external_output_z = 0;
-                synthetic_phase = 0;
-                return {0, 0, 0};
-            }
-
-            const uint8_t phase = synthetic_phase.load(std::memory_order_relaxed);
-            const int16_t x = STEP_SINE_LUT[phase];
-            const uint8_t next_phase = static_cast<uint8_t>((phase + 1) & 7);
-            synthetic_phase = next_phase;
-
-            const AccelSample sample{x, static_cast<int16_t>(x / 2), 0};
+            const AccelSample sample = ExternalSample();
             external_output_x = sample.x;
             external_output_y = sample.y;
             external_output_z = sample.z;
@@ -99,7 +87,8 @@ public:
     bool PulseExternalMotion()
     {
         external_motion_pulse_count.fetch_add(1, std::memory_order_relaxed);
-        const int64_t deadline = SteadyNowNanoseconds() +
+        const int64_t now = SteadyNowNanoseconds();
+        const int64_t deadline = now +
             std::chrono::duration_cast<std::chrono::nanoseconds>(EXTERNAL_MOTION_HOLD).count();
         external_motion_deadline_ns = deadline;
         return true;

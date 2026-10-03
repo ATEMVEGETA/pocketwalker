@@ -220,6 +220,8 @@ void PocketWalker::Start()
                     break;
                 case 0x9732:
                     motion_batches_accepted.fetch_add(1, std::memory_order_relaxed);
+                    motion_last_accepted_steps_q9.store(
+                        *soc->cpu->reg.Reg16(0), std::memory_order_relaxed);
                     break;
                 case 0x95D0:
                     motion_step_awards.fetch_add(1, std::memory_order_relaxed);
@@ -364,6 +366,26 @@ void PocketWalker::SetExternalAcceleration(const float x, const float y, const f
 bool PocketWalker::PulseExternalMotion()
 {
     return step_provider->PulseExternalMotion();
+}
+
+uint64_t PocketWalker::ExternalAccelerometerReadCount() const
+{
+    return step_provider->ExternalReadCount();
+}
+
+uint64_t PocketWalker::MotionBatchesAccepted() const
+{
+    return motion_batches_accepted.load(std::memory_order_relaxed);
+}
+
+uint64_t PocketWalker::MotionStepAwards() const
+{
+    return motion_step_awards.load(std::memory_order_relaxed);
+}
+
+uint16_t PocketWalker::MotionLastAcceptedStepsQ9() const
+{
+    return motion_last_accepted_steps_q9.load(std::memory_order_relaxed);
 }
 
 std::string PocketWalker::GetMotionDiagnostics() const

@@ -2,6 +2,7 @@ package org.atemvegeta.pocketwalker;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
@@ -11,7 +12,8 @@ import android.database.Cursor;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
-import android.os.ParcelFileDescriptor;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.DocumentsContract;
 
 import java.io.File;
@@ -26,18 +28,14 @@ import org.qtproject.qt.android.bindings.QtActivity;
 
 public class PocketWalkerActivity extends QtActivity {
     public static final int FILE_ROM = 1;
-    public static final int FILE_SAVE = 2;
     public static final int IR_MODE_PC = 0;
     public static final int IR_MODE_AUTO_PEER = 1;
     public static final int IR_MODE_OFF = 2;
 
     private static final int PERMISSION_REQUEST = 1001;
-    private static final int ROM_OPEN_REQUEST = 1002;
-    private static final int SAVE_OPEN_REQUEST = 1003;
-    private static final int SAVE_CREATE_REQUEST = 1004;
+    private static final int ROM_FOLDER_REQUEST = 1002;
     private static final String PREFS_NAME = "pocketwalker_storage";
-    private static final String ROM_URI_KEY = "rom_document_uri";
-    private static final String SAVE_URI_KEY = "save_document_uri";
+    private static final String ROM_FOLDER_URI_KEY = "rom_folder_uri";
     private static final String IR_MODE_KEY = "ir_connection_mode";
     private static final String IR_PC_HOST_KEY = "ir_pc_host";
     private static final String PEER_ID_KEY = "peer_device_id";
@@ -45,11 +43,12 @@ public class PocketWalkerActivity extends QtActivity {
     private static volatile PocketWalkerActivity currentActivity;
     private static volatile Context applicationContext;
     private static volatile boolean serviceRequested;
-    private static volatile Uri pendingRomUri;
     private boolean closingNotified;
+    private boolean exitPromptVisible;
 
     private static native void nativeOnFileSelectionResult(int fileType, boolean changed);
     private static native void nativeOnAppClosing();
+    private static native void nativeOnAppBackgrounded();
 
     @Override
     public void onCreate(Bundle state) {
@@ -60,10 +59,51 @@ public class PocketWalkerActivity extends QtActivity {
     }
 
     @Override
+    public void onBackPressed() {
+        showExitConfirmation();
+    }
+
+    @Override
+    protected void onPause() {
+        if (!closingNotified)
+            nativeOnAppBackgrounded();
+        super.onPause();
+    }
+
+    public static void showExitConfirmation() {
+        PocketWalkerActivity activity = currentActivity;
+        if (activity == null)
+            return;
+        activity.runOnUiThread(activity::showExitConfirmationInternal);
+    }
+
+    private void showExitConfirmationInternal() {
+        if (closingNotified || exitPromptVisible)
+            return;
+
+        exitPromptVisible = true;
+        AlertDialog dialog = new AlertDialog.Builder(this)
+            .setTitle("Close PocketWalker?")
+            .setMessage("Your current progress will be saved before the app closes.")
+            .setNegativeButton("Cancel", (ignored, which) -> exitPromptVisible = false)
+            .setPositiveButton("Close", (ignored, which) -> {
+                exitPromptVisible = false;
+                closingNotified = true;
+                nativeOnAppClosing();
+            })
+            .create();
+        dialog.setOnCancelListener(ignored -> exitPromptVisible = false);
+        dialog.show();
+    }
+
+    @Override
     protected void onDestroy() {
-        if (isFinishing() && !closingNotified) {
+        if (isFinishing() && !isChangingConfigurations() && !closingNotified) {
             closingNotified = true;
-            nativeOnAppClosing();
+            // The service owns task-removal shutdown. Qt is retained here so
+            // QtActivityBase does not wait on a main loop that Android is in
+            // the middle of detaching.
+            super.onRetainNonConfigurationInstance();
         }
         if (currentActivity == this)
             currentActivity = null;
@@ -71,127 +111,90 @@ public class PocketWalkerActivity extends QtActivity {
     }
 
     public static void chooseRomFile() {
-        openExistingDocument(ROM_OPEN_REQUEST, "application/octet-stream");
-    }
-
-    public static void chooseSaveFile() {
-        openExistingDocument(SAVE_OPEN_REQUEST, "application/octet-stream");
-    }
-
-    public static void createNewSave() {
-        PocketWalkerActivity activity = currentActivity;
-        Context context = applicationContext;
-        if (activity == null || context == null) {
-            nativeOnFileSelectionResult(FILE_SAVE, false);
-            return;
-        }
-
-        Uri romUri = pendingRomUri != null ? pendingRomUri : selectedUri(context, ROM_URI_KEY);
-        Uri parentUri = parentDocumentUri(romUri);
-        if (parentUri != null) {
-            try {
-                Uri saveUri = DocumentsContract.createDocument(
-                    context.getContentResolver(), parentUri,
-                    "application/octet-stream", "rom.pwsav");
-                if (saveUri != null) {
-                    commitSaveSelection(context, saveUri);
-                    nativeOnFileSelectionResult(FILE_SAVE, true);
-                    return;
-                }
-            } catch (Exception ignored) {
-            }
-        }
-
-        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
-        intent.setType("application/octet-stream");
-        intent.putExtra(Intent.EXTRA_TITLE, "rom.pwsav");
-        intent.addCategory(Intent.CATEGORY_OPENABLE);
-        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION |
-                        Intent.FLAG_GRANT_WRITE_URI_PERMISSION |
-                        Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && parentUri != null)
-            intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, parentUri);
-        activity.startActivityForResult(intent, SAVE_CREATE_REQUEST);
-    }
-
-    private static void openExistingDocument(int requestCode, String mimeType) {
         PocketWalkerActivity activity = currentActivity;
         if (activity == null) {
-            nativeOnFileSelectionResult(
-                requestCode == ROM_OPEN_REQUEST ? FILE_ROM : FILE_SAVE, false);
+            nativeOnFileSelectionResult(FILE_ROM, false);
             return;
         }
 
-        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-        intent.setType(mimeType);
-        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION |
                         Intent.FLAG_GRANT_WRITE_URI_PERMISSION |
-                        Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
-        activity.startActivityForResult(intent, requestCode);
+                        Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION |
+                        Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
+        Uri current = selectedFolderUri(activity);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && current != null)
+            intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, current);
+        activity.startActivityForResult(intent, ROM_FOLDER_REQUEST);
     }
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode != ROM_OPEN_REQUEST && requestCode != SAVE_OPEN_REQUEST &&
-            requestCode != SAVE_CREATE_REQUEST)
+        if (requestCode != ROM_FOLDER_REQUEST)
             return;
 
-        int fileType = requestCode == ROM_OPEN_REQUEST ? FILE_ROM : FILE_SAVE;
         boolean changed = false;
         if (resultCode == Activity.RESULT_OK && data != null && data.getData() != null) {
-            Uri uri = data.getData();
+            Uri treeUri = data.getData();
             int flags = data.getFlags() &
                 (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
             try {
-                getContentResolver().takePersistableUriPermission(uri, flags);
-                if (fileType == FILE_ROM) {
-                    pendingRomUri = uri;
+                getContentResolver().takePersistableUriPermission(treeUri, flags);
+                if (findChildDocument(getContentResolver(), treeUri, "rom.bin") != null) {
+                    preferences(this).edit()
+                        .putString(ROM_FOLDER_URI_KEY, treeUri.toString())
+                        .commit();
+                    changed = true;
                 } else {
-                    commitSaveSelection(this, uri);
+                    new AlertDialog.Builder(this)
+                        .setTitle("rom.bin not found")
+                        .setMessage("The selected folder does not contain rom.bin.")
+                        .setPositiveButton("OK", null)
+                        .show();
                 }
-                changed = true;
             } catch (SecurityException ignored) {
             }
         }
-        if (!changed && fileType == FILE_SAVE)
-            pendingRomUri = null;
-        nativeOnFileSelectionResult(fileType, changed);
+        nativeOnFileSelectionResult(FILE_ROM, changed);
     }
 
-    public static void cancelPendingRomChange() {
-        pendingRomUri = null;
+    public static void finishAfterNativeClose() {
+        PocketWalkerActivity activity = currentActivity;
+        Context context = applicationContext;
+        // QtActivity.onDestroy waits for the native Qt main loop to return.
+        // Give that thread time to finish before Android destroys the Activity.
+        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+            serviceRequested = false;
+            if (context != null)
+                PocketWalkerService.stop(context);
+            if (activity != null && !activity.isFinishing())
+                activity.finishAndRemoveTask();
+            else
+                System.exit(0);
+        }, 150);
     }
 
     public static boolean hasRomFile() {
         Context context = applicationContext;
-        return context != null && hasReadableDocument(context, ROM_URI_KEY);
-    }
-
-    public static boolean hasPendingRomFile() {
-        return pendingRomUri != null;
-    }
-
-    public static boolean hasSaveFile() {
-        Context context = applicationContext;
-        return context != null && hasReadableDocument(context, SAVE_URI_KEY);
-    }
-
-    public static String selectedRomLabel() {
-        return selectedDocumentLabel(ROM_URI_KEY, "No ROM selected");
-    }
-
-    public static String selectedSaveLabel() {
-        return selectedDocumentLabel(SAVE_URI_KEY, "No save selected");
+        if (context == null)
+            return false;
+        Uri treeUri = selectedFolderUri(context);
+        Uri romUri = findChildDocument(context.getContentResolver(), treeUri, "rom.bin");
+        if (romUri != null)
+            return true;
+        clearFolderSelection(context);
+        return false;
     }
 
     public static String selectedRomPath() {
-        return selectedDocumentPath(ROM_URI_KEY, "No ROM selected");
-    }
-
-    public static String selectedSavePath() {
-        return selectedDocumentPath(SAVE_URI_KEY, "No save selected");
+        Context context = applicationContext;
+        if (context == null)
+            return "No PocketWalker folder selected";
+        String folder = selectedFolderPath(context, "No PocketWalker folder selected");
+        if ("No PocketWalker folder selected".equals(folder))
+            return folder;
+        return folder + "\nrom.bin + rom.pwsav";
     }
 
     public static int getIrConnectionMode() {
@@ -247,7 +250,8 @@ public class PocketWalkerActivity extends QtActivity {
         }
 
         ContentResolver resolver = context.getContentResolver();
-        Uri romUri = selectedUri(context, ROM_URI_KEY);
+        Uri treeUri = selectedFolderUri(context);
+        Uri romUri = findChildDocument(resolver, treeUri, "rom.bin");
         if (romUri == null)
             return false;
 
@@ -257,16 +261,20 @@ public class PocketWalkerActivity extends QtActivity {
         if (!copyToInternalAtomically(resolver, romUri, new File(directory, "rom.bin")))
             return false;
 
-        Uri saveUri = selectedUri(context, SAVE_URI_KEY);
+        Uri saveUri = findChildDocument(resolver, treeUri, "rom.pwsav");
         File internalSave = new File(directory, "rom.pwsav");
-        if (saveUri != null) {
-            if (!copyToInternalAtomically(resolver, saveUri, internalSave))
-                return false;
-        } else {
+        if (saveUri == null) {
+            deleteInternalSaveFiles(directory);
+            return true;
+        }
+        if (!copyToInternalAtomically(resolver, saveUri, internalSave))
+            return false;
+        if (!hasPwsavHeader(internalSave)) {
+            long invalidLength = internalSave.length();
             deleteIfPresent(internalSave);
-            deleteIfPresent(new File(directory, "rom.sav"));
-            deleteIfPresent(new File(directory, "rom.sav.state"));
-            deleteIfPresent(new File(directory, "rom.sav.rtc"));
+            // Recover placeholders left by an interrupted/failed save creation.
+            // Non-empty malformed saves are never silently replaced.
+            return invalidLength <= 8;
         }
         return true;
     }
@@ -276,21 +284,34 @@ public class PocketWalkerActivity extends QtActivity {
         if (context == null)
             return false;
 
-        Uri saveUri = selectedUri(context, SAVE_URI_KEY);
         File internalSave = new File(internalDirectory, "rom.pwsav");
-        if (saveUri == null || !internalSave.isFile())
+        if (!hasPwsavHeader(internalSave))
+            return false;
+
+        ContentResolver resolver = context.getContentResolver();
+        Uri treeUri = selectedFolderUri(context);
+        if (treeUri == null)
+            return false;
+        Uri saveUri = findChildDocument(resolver, treeUri, "rom.pwsav");
+        if (saveUri == null)
+            saveUri = createChildDocument(resolver, treeUri, "rom.pwsav");
+        if (saveUri == null)
             return false;
 
         try (InputStream input = new FileInputStream(internalSave);
-             OutputStream output = context.getContentResolver().openOutputStream(saveUri, "wt")) {
+             OutputStream output = resolver.openOutputStream(saveUri, "wt")) {
             if (output == null)
                 return false;
             copy(input, output);
             output.flush();
-            return true;
         } catch (Exception ignored) {
             return false;
         }
+
+        if (!hasPwsavDocument(resolver, saveUri, internalSave.length()))
+            return false;
+
+        return true;
     }
 
     public static void startPocketWalkerService() {
@@ -331,65 +352,62 @@ public class PocketWalkerActivity extends QtActivity {
         return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
     }
 
-    private static Uri selectedUri(Context context, String key) {
-        String value = preferences(context).getString(key, null);
+    private static Uri selectedFolderUri(Context context) {
+        String value = preferences(context).getString(ROM_FOLDER_URI_KEY, null);
         return value == null || value.isEmpty() ? null : Uri.parse(value);
     }
 
-    private static void commitSaveSelection(Context context, Uri saveUri) {
-        SharedPreferences.Editor editor = preferences(context).edit();
-        if (pendingRomUri != null)
-            editor.putString(ROM_URI_KEY, pendingRomUri.toString());
-        editor.putString(SAVE_URI_KEY, saveUri.toString()).apply();
-        pendingRomUri = null;
+    private static void clearFolderSelection(Context context) {
+        preferences(context).edit().remove(ROM_FOLDER_URI_KEY).commit();
     }
 
-    private static boolean hasReadableDocument(Context context, String key) {
-        Uri uri = selectedUri(context, key);
-        if (uri == null)
-            return false;
-
-        try (ParcelFileDescriptor descriptor =
-                 context.getContentResolver().openFileDescriptor(uri, "r")) {
-            if (descriptor != null)
-                return true;
-        } catch (Exception ignored) {
-        }
-
-        preferences(context).edit().remove(key).commit();
-        return false;
-    }
-
-    private static String selectedDocumentLabel(String key, String fallback) {
-        Context context = applicationContext;
-        if (context == null)
-            return fallback;
-        Uri uri = selectedUri(context, key);
-        if (uri == null)
-            return fallback;
-
-        try (Cursor cursor = context.getContentResolver().query(
-                 uri, new String[] { DocumentsContract.Document.COLUMN_DISPLAY_NAME },
-                 null, null, null)) {
-            if (cursor != null && cursor.moveToFirst()) {
-                String label = cursor.getString(0);
-                if (label != null && !label.isEmpty())
-                    return label;
+    private static Uri findChildDocument(
+        ContentResolver resolver, Uri treeUri, String displayName) {
+        if (treeUri == null)
+            return null;
+        try {
+            String treeId = DocumentsContract.getTreeDocumentId(treeUri);
+            Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, treeId);
+            try (Cursor cursor = resolver.query(
+                     childrenUri,
+                     new String[] {
+                         DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                         DocumentsContract.Document.COLUMN_DISPLAY_NAME
+                     }, null, null, null)) {
+                if (cursor == null)
+                    return null;
+                while (cursor.moveToNext()) {
+                    if (displayName.equalsIgnoreCase(cursor.getString(1))) {
+                        return DocumentsContract.buildDocumentUriUsingTree(
+                            treeUri, cursor.getString(0));
+                    }
+                }
             }
         } catch (Exception ignored) {
         }
-        return uri.getLastPathSegment();
+        return null;
     }
 
-    private static String selectedDocumentPath(String key, String fallback) {
-        Context context = applicationContext;
-        if (context == null)
-            return fallback;
-        Uri uri = selectedUri(context, key);
-        if (uri == null)
+    private static Uri createChildDocument(
+        ContentResolver resolver, Uri treeUri, String displayName) {
+        if (treeUri == null)
+            return null;
+        try {
+            String treeId = DocumentsContract.getTreeDocumentId(treeUri);
+            Uri directoryUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, treeId);
+            return DocumentsContract.createDocument(
+                resolver, directoryUri, "application/octet-stream", displayName);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private static String selectedFolderPath(Context context, String fallback) {
+        Uri treeUri = selectedFolderUri(context);
+        if (treeUri == null)
             return fallback;
         try {
-            String documentId = DocumentsContract.getDocumentId(uri);
+            String documentId = DocumentsContract.getTreeDocumentId(treeUri);
             int separator = documentId.indexOf(':');
             if (separator >= 0) {
                 String volume = documentId.substring(0, separator);
@@ -399,22 +417,7 @@ public class PocketWalkerActivity extends QtActivity {
             }
             return documentId;
         } catch (Exception ignored) {
-            return uri.toString();
-        }
-    }
-
-    private static Uri parentDocumentUri(Uri documentUri) {
-        if (documentUri == null || !DocumentsContract.isDocumentUri(applicationContext, documentUri))
-            return null;
-        try {
-            String documentId = DocumentsContract.getDocumentId(documentUri);
-            int separator = documentId.lastIndexOf('/');
-            if (separator < 0)
-                return null;
-            String parentId = documentId.substring(0, separator);
-            return DocumentsContract.buildDocumentUri(documentUri.getAuthority(), parentId);
-        } catch (Exception ignored) {
-            return null;
+            return treeUri.toString();
         }
     }
 
@@ -451,6 +454,54 @@ public class PocketWalkerActivity extends QtActivity {
             if (read > 0)
                 output.write(buffer, 0, read);
         }
+    }
+
+    private static boolean hasPwsavHeader(File file) {
+        final byte[] expected = new byte[] {'P', 'W', 'S', 'A', 'V', '0', '0', '1'};
+        if (!file.isFile() || file.length() < expected.length)
+            return false;
+
+        try (InputStream input = new FileInputStream(file)) {
+            for (byte value : expected) {
+                if (input.read() != (value & 0xFF))
+                    return false;
+            }
+            return true;
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private static boolean hasPwsavDocument(
+        ContentResolver resolver, Uri uri, long expectedLength) {
+        final byte[] expected = new byte[] {'P', 'W', 'S', 'A', 'V', '0', '0', '1'};
+        long total = 0;
+        try (InputStream input = resolver.openInputStream(uri)) {
+            if (input == null)
+                return false;
+            for (byte value : expected) {
+                if (input.read() != (value & 0xFF))
+                    return false;
+                total++;
+            }
+            byte[] buffer = new byte[64 * 1024];
+            int read;
+            while ((read = input.read(buffer)) >= 0) {
+                if (read > 0)
+                    total += read;
+            }
+        } catch (Exception ignored) {
+            return false;
+        }
+
+        return total > expected.length && (expectedLength < 0 || total == expectedLength);
+    }
+
+    private static void deleteInternalSaveFiles(File directory) {
+        deleteIfPresent(new File(directory, "rom.pwsav"));
+        deleteIfPresent(new File(directory, "rom.sav"));
+        deleteIfPresent(new File(directory, "rom.sav.state"));
+        deleteIfPresent(new File(directory, "rom.sav.rtc"));
     }
 
     private static void deleteIfPresent(File file) {

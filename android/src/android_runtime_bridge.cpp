@@ -60,3 +60,27 @@ bool AndroidRuntimeBridge::PushMotionPulse()
     active_emulator->PulseExternalMotion();
     return true;
 }
+
+uint64_t AndroidRuntimeBridge::ExternalAccelerometerReadCount()
+{
+    std::scoped_lock lock(emulator_mutex);
+    return active_emulator ? active_emulator->ExternalAccelerometerReadCount() : 0;
+}
+
+uint64_t AndroidRuntimeBridge::MotionBatchesAccepted()
+{
+    std::scoped_lock lock(emulator_mutex);
+    return active_emulator ? active_emulator->MotionBatchesAccepted() : 0;
+}
+
+uint64_t AndroidRuntimeBridge::MotionStepAwards()
+{
+    std::scoped_lock lock(emulator_mutex);
+    return active_emulator ? active_emulator->MotionStepAwards() : 0;
+}
+
+uint16_t AndroidRuntimeBridge::MotionLastAcceptedStepsQ9()
+{
+    std::scoped_lock lock(emulator_mutex);
+    return active_emulator ? active_emulator->MotionLastAcceptedStepsQ9() : 0;
+}

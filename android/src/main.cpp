@@ -1,6 +1,8 @@
 #include <QApplication>
+#include <QJniObject>
 #include <QMetaObject>
 
+#include <atomic>
 #include <jni.h>
 
 #include "android_runtime_bridge.h"
@@ -9,13 +11,25 @@
 
 namespace
 {
+constexpr auto ANDROID_ACTIVITY = "org/atemvegeta/pocketwalker/PocketWalkerActivity";
 AndroidWindow* g_window = nullptr;
+std::atomic<bool> g_background_checkpoint_complete = true;
 
 void QueueAppClosing()
 {
     QMetaObject::invokeMethod(qApp, [] {
         if (g_window)
             g_window->appClosing();
+    }, Qt::QueuedConnection);
+}
+
+void QueueBackgroundCheckpoint()
+{
+    g_background_checkpoint_complete.store(false, std::memory_order_release);
+    QMetaObject::invokeMethod(qApp, [] {
+        if (g_window)
+            g_window->checkpointForBackground();
+        g_background_checkpoint_complete.store(true, std::memory_order_release);
     }, Qt::QueuedConnection);
 }
 }
@@ -60,9 +74,17 @@ Java_org_atemvegeta_pocketwalker_PocketWalkerActivity_nativeOnAppClosing(JNIEnv*
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_org_atemvegeta_pocketwalker_PocketWalkerService_nativeOnAppClosing(JNIEnv*, jclass)
+Java_org_atemvegeta_pocketwalker_PocketWalkerActivity_nativeOnAppBackgrounded(JNIEnv*, jclass)
 {
-    QueueAppClosing();
+    QueueBackgroundCheckpoint();
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_org_atemvegeta_pocketwalker_PocketWalkerService_nativeIsBackgroundCheckpointComplete(
+    JNIEnv*, jclass)
+{
+    return g_background_checkpoint_complete.load(std::memory_order_acquire)
+        ? JNI_TRUE : JNI_FALSE;
 }
 
 int main(int argc, char* argv[])
@@ -80,5 +102,6 @@ int main(int argc, char* argv[])
     const int result = app.exec();
     g_window = nullptr;
     AppSettings::instance.save();
+    QJniObject::callStaticMethod<void>(ANDROID_ACTIVITY, "finishAfterNativeClose", "()V");
     return result;
 }

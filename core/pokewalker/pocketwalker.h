@@ -43,6 +43,10 @@ public:
     void UseExternalAccelerometer(bool value);
     void SetExternalAcceleration(float x, float y, float z);
     bool PulseExternalMotion();
+    uint64_t ExternalAccelerometerReadCount() const;
+    uint64_t MotionBatchesAccepted() const;
+    uint64_t MotionStepAwards() const;
+    uint16_t MotionLastAcceptedStepsQ9() const;
     std::string GetMotionDiagnostics() const;
     void UseFastMode(bool value);
     void SetBypassPowerSave(bool value);
@@ -127,6 +131,7 @@ private:
     std::atomic<uint64_t> motion_batches_accepted = 0;
     std::atomic<uint64_t> motion_batches_rejected = 0;
     std::atomic<uint64_t> motion_step_awards = 0;
+    std::atomic<uint16_t> motion_last_accepted_steps_q9 = 0;
     std::atomic<uint16_t> motion_last_candidate_scaled = 0;
     std::atomic<uint16_t> motion_last_spectrum_maximum = 0;
 };

@@ -13,30 +13,28 @@ import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
 import android.net.wifi.WifiManager;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import android.os.PowerManager;
+import android.os.SystemClock;
 
 public class PocketWalkerService extends Service implements SensorEventListener {
     private static final String CHANNEL_ID = "pocketwalker_active";
     private static final int NOTIFICATION_ID = 1516;
-
     private SensorManager sensorManager;
     private Sensor motionSensor;
     private Sensor wakeStepSensor;
     private PowerManager.WakeLock wakeLock;
     private WifiManager.MulticastLock multicastLock;
-    private long lastMotionPulseNanos;
     private boolean sensorIncludesGravity;
-    private boolean gravityInitialized;
-    private float gravityX;
-    private float gravityY;
-    private float gravityZ;
-    private static final float MOTION_PEAK_THRESHOLD = 2.2f;
-    private static final long MOTION_PULSE_COOLDOWN_NANOS = 350_000_000L;
+    private static final int MOTION_SAMPLE_PERIOD_US = 20_000;
+    private static final long TASK_REMOVAL_SAVE_TIMEOUT_MS = 4_000;
+    private static final long TASK_REMOVAL_POLL_MS = 50;
     private static native boolean nativeSetMotionEnabled(boolean enabled);
     private static native boolean nativeOnAcceleration(float x, float y, float z);
     private static native boolean nativeOnMotionPulse();
-    private static native void nativeOnAppClosing();
+    private static native boolean nativeIsBackgroundCheckpointComplete();
 
     public static void start(Context context) {
         Intent intent = new Intent(context, PocketWalkerService.class);
@@ -82,19 +80,18 @@ public class PocketWalkerService extends Service implements SensorEventListener 
             return;
 
         if (motionSensor == null) {
-            motionSensor = sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION, true);
+            motionSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER, true);
+            if (motionSensor == null)
+                motionSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
+            if (motionSensor == null)
+                motionSensor = sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION, true);
             if (motionSensor == null)
                 motionSensor = sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION);
-            if (motionSensor == null) {
-                motionSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER, true);
-                if (motionSensor == null)
-                    motionSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
-            }
             if (motionSensor == null)
                 return;
             sensorIncludesGravity = motionSensor.getType() == Sensor.TYPE_ACCELEROMETER;
             boolean registered = sensorManager.registerListener(
-                this, motionSensor, SensorManager.SENSOR_DELAY_GAME, 0);
+                this, motionSensor, MOTION_SAMPLE_PERIOD_US, 0);
             if (!registered) {
                 motionSensor = null;
                 return;
@@ -125,35 +122,10 @@ public class PocketWalkerService extends Service implements SensorEventListener 
             event.sensor.getType() != Sensor.TYPE_ACCELEROMETER)
             return;
 
-        float x = event.values[0];
-        float y = event.values[1];
-        float z = event.values[2];
-
-        if (sensorIncludesGravity) {
-            if (!gravityInitialized) {
-                gravityX = x;
-                gravityY = y;
-                gravityZ = z;
-                gravityInitialized = true;
-            }
-            final float alpha = 0.8f;
-            gravityX = alpha * gravityX + (1.0f - alpha) * x;
-            gravityY = alpha * gravityY + (1.0f - alpha) * y;
-            gravityZ = alpha * gravityZ + (1.0f - alpha) * z;
-            x -= gravityX;
-            y -= gravityY;
-            z -= gravityZ;
-        }
-
-        float magnitude = (float)Math.sqrt(x * x + y * y + z * z);
-        nativeOnAcceleration(x, y, z);
-
-        long now = event.timestamp;
-        if (magnitude >= MOTION_PEAK_THRESHOLD &&
-            now - lastMotionPulseNanos >= MOTION_PULSE_COOLDOWN_NANOS) {
-            lastMotionPulseNanos = now;
-            nativeOnMotionPulse();
-        }
+        // Forward the physical acceleration directly. The emulated BMA150
+        // converts it to sensor counts and the retail firmware alone decides
+        // whether the samples represent walking and how many steps to award.
+        nativeOnAcceleration(event.values[0], event.values[1], event.values[2]);
     }
 
     @Override
@@ -177,8 +149,23 @@ public class PocketWalkerService extends Service implements SensorEventListener 
     @Override
     public void onTaskRemoved(Intent rootIntent) {
         nativeSetMotionEnabled(false);
-        nativeOnAppClosing();
+        stopForeground(true);
+        waitForBackgroundCheckpoint(SystemClock.uptimeMillis() + TASK_REMOVAL_SAVE_TIMEOUT_MS);
         super.onTaskRemoved(rootIntent);
+    }
+
+    private void waitForBackgroundCheckpoint(long deadline) {
+        if (nativeIsBackgroundCheckpointComplete() || SystemClock.uptimeMillis() >= deadline) {
+            stopSelf();
+            new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                android.os.Process.killProcess(android.os.Process.myPid());
+                System.exit(0);
+            }, 150);
+            return;
+        }
+
+        new Handler(Looper.getMainLooper()).postDelayed(
+            () -> waitForBackgroundCheckpoint(deadline), TASK_REMOVAL_POLL_MS);
     }
 
     @Override

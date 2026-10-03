@@ -1209,6 +1209,25 @@ InstructionSet::InstructionSet() :
         }
     });
 
+    root.AddSubtable(0x5, 0xC,
+        [](const CPU& cpu) { return static_cast<uint32_t>(cpu.a()); },
+        [](const CPU& cpu) { return static_cast<uint32_t>(cpu.b()); },
+        [](InstructionTable& table)
+        {
+            table.Add(0x5C, 0x00, {
+                "BSR d:16",
+                4,
+                {2, 0, 1, 0, 0, 2},
+                [](CPU& cpu)
+                {
+                    cpu.Push16(cpu.reg.PC + 4);
+
+                    const auto disp = static_cast<int16_t>(cpu.cd());
+                    cpu.reg.PC += disp;
+                }
+            });
+        });
+
     root.AddSubtable(0x5, 0x8,
         [](const CPU& cpu) { return static_cast<uint32_t>(cpu.a()); },
         [](const CPU& cpu) { return static_cast<uint32_t>(cpu.bH()); },

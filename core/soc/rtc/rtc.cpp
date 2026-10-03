@@ -302,19 +302,7 @@ void RTC::RegisterIOHandlers(const std::shared_ptr<IO>& io)
 
 void RTC::DebugLog(const std::string& message) const
 {
-    if (debug_log_path.empty())
-        return;
-
-    const std::filesystem::path debug_directory = debug_log_path.parent_path();
-    if (!std::filesystem::exists(debug_directory / "pocketwalker_enable_debug_log.txt"))
-        return;
-
-    std::ofstream log(debug_log_path, std::ios::app);
-    if (!log)
-        return;
-
-    const std::time_t now = std::time(nullptr);
-    log << FormatLocalTime(now) << " | " << message << '\n';
+    (void)message;
 }
 
 void RTC::DebugMessage(const std::string& message) const
@@ -333,7 +321,6 @@ void RTC::LoadState(const std::string& path)
 void RTC::LoadState(std::istream& f, const std::filesystem::path& rtc_directory)
 {
     clock_directory = rtc_directory;
-    debug_log_path = rtc_directory / "pocketwalker_rtc_debug.log";
     DebugLog("----- RTC LoadState begin -----");
     DebugLog("rtc_directory=" + rtc_directory.string());
     DebugLog("state_virtual_before_rtc=" + DescribeTime(virtual_time));
@@ -828,9 +815,6 @@ void RTC::SaveState(const std::string& path)
 {
     const auto rtc_path = std::filesystem::path(path);
     const auto rtc_directory = rtc_path.parent_path();
-    if (debug_log_path.empty())
-        debug_log_path = rtc_directory / "pocketwalker_rtc_debug.log";
-
     std::ofstream f(path, std::ios::binary);
     if (!f)
     {
@@ -844,9 +828,6 @@ void RTC::SaveState(const std::string& path)
 
 void RTC::SaveState(std::ostream& f, const std::filesystem::path& rtc_directory)
 {
-    if (debug_log_path.empty())
-        debug_log_path = rtc_directory / "pocketwalker_rtc_debug.log";
-
     const char magic[8] = {'P', 'W', 'R', 'T', 'C', '0', '0', '3'};
     const int64_t saved_virtual_time = static_cast<int64_t>(IsCatchUpActive() ? catch_up_target_time : virtual_time);
     const HostClockInfo clock = CurrentHostClock(rtc_directory);

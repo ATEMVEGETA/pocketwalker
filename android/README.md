@@ -15,12 +15,11 @@ classification, and step pacing.
 
 ## ROM and save files
 
-On first launch, select `rom.bin`, then either select an existing `rom.pwsav` or
-start a new game. For a new game, the app first attempts to create `rom.pwsav`
-beside the ROM. Some Android document providers require a one-time Create File
-confirmation before they grant access to the new save. ROM and save selections
-can be changed independently from the settings button in the top-right corner.
-The settings dialog shows both current document paths.
+On first launch, select the folder containing `rom.bin`. The app automatically
+loads `rom.pwsav` from the same folder. If it does not exist, PocketWalker starts
+with a new unsynced save and creates a valid `rom.pwsav` there when progress is
+first saved. The folder can be changed from the settings button in the top-right
+corner.
 
 The emulator works from a private local mirror for performance. It atomically
 loads the selected files into that mirror, saves a complete `rom.pwsav` there,

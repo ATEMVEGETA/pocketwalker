@@ -9,6 +9,7 @@
 #include "desktop/src/qt/emulator/emulator_context.h"
 
 class QDialog;
+class QCloseEvent;
 class QLabel;
 class QLineEdit;
 class QProgressBar;
@@ -25,18 +26,19 @@ public:
 
     void fileSelectionFinished(int file_type, bool changed);
     void appClosing();
+    void checkpointForBackground();
+
+protected:
+    void closeEvent(QCloseEvent* event) override;
 
 private:
     void chooseRomFile();
-    void chooseSaveFile();
-    void createNewSave();
-    void promptForSave();
     void loadSelectedFiles();
     void showSettingsDialog();
     void updateSettingsDialog();
     void startEmulator();
     void stopEmulator(bool stop_service = true);
-    void syncSaveToSelectedFile();
+    bool syncSaveToSelectedFile();
     void startBackgroundService();
     void stopBackgroundService();
     void updateRtcCatchUp();
@@ -44,12 +46,8 @@ private:
     void updateConnectionControls();
     void setControlsEnabled(bool enabled);
     bool hasSelectedRom() const;
-    bool hasSelectedSave() const;
     bool syncFromSelectedFiles() const;
-    QString selectedRomLabel() const;
-    QString selectedSaveLabel() const;
     QString selectedRomPath() const;
-    QString selectedSavePath() const;
     int irConnectionMode() const;
     void setIrConnectionMode(int mode);
     QString irPcHost() const;
@@ -74,7 +72,6 @@ private:
     QLabel* connection_status = nullptr;
     QDialog* settings_dialog = nullptr;
     QLabel* rom_path_label = nullptr;
-    QLabel* save_path_label = nullptr;
     QLineEdit* ir_pc_host_edit = nullptr;
     QPushButton* ir_pc_host_button = nullptr;
     QTimer render_timer;

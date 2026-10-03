@@ -93,8 +93,6 @@ private:
     std::vector<time_t> catch_up_midnights = {};
     size_t catch_up_midnight_index = 0;
     std::filesystem::path clock_directory = {};
-    std::filesystem::path debug_log_path = {};
-
     void SetRegistersFromVirtualTime();
     void RequestClockDisplayRefresh();
     void RequestClockDisplayRefreshNearMidnight();
